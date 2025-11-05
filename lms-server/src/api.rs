@@ -44,7 +44,6 @@ pub async fn list_models(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 // Chat completions (OpenAI compatible)
-#[axum::debug_handler]
 pub async fn chat_completions(
     State(state): State<AppState>,
     Json(req): Json<ChatCompletionRequest>,
@@ -150,133 +149,105 @@ pub async fn chat_completions(
 pub async fn completions(
     State(state): State<AppState>,
     Json(req): Json<CompletionRequest>,
-) -> impl IntoResponse {
-    async fn inner(
-        state: Arc<ModelManager>,
-        req: CompletionRequest,
-    ) -> Result<Response, AppError> {
-        if !state.is_loaded(&req.model).await {
-            state
-                .load_model(&req.model, ModelConfig::default())
-                .await
-                .map_err(|e| AppError::ModelNotFound(e.to_string()))?;
-        }
-
-        let temperature = req.temperature.unwrap_or(0.7);
-        let max_tokens = req.max_tokens.unwrap_or(2048);
-
-        let content = state
-            .inference_engine()
-            .generate(&req.model, &req.prompt, temperature, max_tokens)
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !state.model_manager.is_loaded(&req.model).await {
+        state
+            .model_manager
+            .load_model(&req.model, ModelConfig::default())
             .await
-            .map_err(|e| AppError::InferenceError(e.to_string()))?;
-
-        Ok(Json(serde_json::json!({
-            "id": uuid::Uuid::new_v4().to_string(),
-            "object": "text_completion",
-            "created": current_timestamp(),
-            "model": req.model,
-            "choices": [{
-                "text": content,
-                "index": 0,
-                "finish_reason": "stop"
-            }]
-        }))
-        .into_response())
+            .map_err(|e| AppError::ModelNotFound(e.to_string()))?;
     }
 
-    match inner(state.model_manager, req).await {
-        Ok(resp) => resp,
-        Err(e) => e.into_response(),
-    }
+    let temperature = req.temperature.unwrap_or(0.7);
+    let max_tokens = req.max_tokens.unwrap_or(2048);
+
+    let content = state
+        .model_manager
+        .inference_engine()
+        .generate(&req.model, &req.prompt, temperature, max_tokens)
+        .await
+        .map_err(|e| AppError::InferenceError(e.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "id": uuid::Uuid::new_v4().to_string(),
+        "object": "text_completion",
+        "created": current_timestamp(),
+        "model": req.model,
+        "choices": [{
+            "text": content,
+            "index": 0,
+            "finish_reason": "stop"
+        }]
+    })))
 }
 
 // Embeddings
 pub async fn embeddings(
     State(state): State<AppState>,
     Json(req): Json<EmbeddingRequest>,
-) -> impl IntoResponse {
-    async fn inner(
-        state: Arc<ModelManager>,
-        req: EmbeddingRequest,
-    ) -> Result<Response, AppError> {
-        if !state.is_loaded(&req.model).await {
-            state
-                .load_model(&req.model, ModelConfig::default())
-                .await
-                .map_err(|e| AppError::ModelNotFound(e.to_string()))?;
-        }
-
-        let texts = match req.input {
-            StringOrArray::String(s) => vec![s],
-            StringOrArray::Array(arr) => arr,
-        };
-
-        let embeddings = state
-            .inference_engine()
-            .generate_embeddings(&req.model, texts.clone())
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !state.model_manager.is_loaded(&req.model).await {
+        state
+            .model_manager
+            .load_model(&req.model, ModelConfig::default())
             .await
-            .map_err(|e| AppError::InferenceError(e.to_string()))?;
+            .map_err(|e| AppError::ModelNotFound(e.to_string()))?;
+    }
 
-        let data: Vec<_> = embeddings
-            .into_iter()
-            .enumerate()
-            .map(|(i, embedding)| {
-                serde_json::json!({
-                    "object": "embedding",
-                    "embedding": embedding,
-                    "index": i
-                })
+    let texts = match req.input {
+        StringOrArray::String(s) => vec![s],
+        StringOrArray::Array(arr) => arr,
+    };
+
+    let embeddings = state
+        .model_manager
+        .inference_engine()
+        .generate_embeddings(&req.model, texts.clone())
+        .await
+        .map_err(|e| AppError::InferenceError(e.to_string()))?;
+
+    let data: Vec<_> = embeddings
+        .into_iter()
+        .enumerate()
+        .map(|(i, embedding)| {
+            serde_json::json!({
+                "object": "embedding",
+                "embedding": embedding,
+                "index": i
             })
-            .collect();
+        })
+        .collect();
 
-        let total_tokens: usize = texts.iter().map(|t| t.split_whitespace().count()).sum();
+    let total_tokens: usize = texts.iter().map(|t| t.split_whitespace().count()).sum();
 
-        Ok(Json(serde_json::json!({
-            "object": "list",
-            "data": data,
-            "model": req.model,
-            "usage": {
-                "prompt_tokens": total_tokens,
-                "total_tokens": total_tokens
-            }
-        }))
-        .into_response())
-    }
-
-    match inner(state.model_manager, req).await {
-        Ok(resp) => resp,
-        Err(e) => e.into_response(),
-    }
+    Ok(Json(serde_json::json!({
+        "object": "list",
+        "data": data,
+        "model": req.model,
+        "usage": {
+            "prompt_tokens": total_tokens,
+            "total_tokens": total_tokens
+        }
+    })))
 }
 
 // Load model
 pub async fn load_model(
     State(state): State<AppState>,
     Json(req): Json<LoadModelRequest>,
-) -> impl IntoResponse {
-    async fn inner(
-        state: Arc<ModelManager>,
-        req: LoadModelRequest,
-    ) -> Result<Response, AppError> {
-        let config = req.config.unwrap_or_default();
+) -> Result<Json<serde_json::Value>, AppError> {
+    let config = req.config.unwrap_or_default();
 
-        state
-            .load_model(&req.model_id, config)
-            .await
-            .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
+    state
+        .model_manager
+        .load_model(&req.model_id, config)
+        .await
+        .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
 
-        Ok(Json(serde_json::json!({
-            "success": true,
-            "model_id": req.model_id
-        }))
-        .into_response())
-    }
-
-    match inner(state.model_manager, req).await {
-        Ok(resp) => resp,
-        Err(e) => e.into_response(),
-    }
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "model_id": req.model_id
+    })))
 }
 
 // Unload model

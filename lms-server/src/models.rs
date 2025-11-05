@@ -265,12 +265,22 @@ impl ModelManager {
 
 fn extract_quantization(filename: &str) -> Option<String> {
     // Extract quantization from filename (e.g., q4_k_m, q5_k_s)
+    // Pattern: q followed by a digit, then optionally followed by alphanumeric or underscore
     let lower = filename.to_lowercase();
 
-    if let Some(start) = lower.find("q") {
-        let rest = &lower[start..];
-        if let Some(end) = rest.find(|c: char| !c.is_alphanumeric() && c != '_') {
-            return Some(rest[..end].to_uppercase());
+    // Find 'q' followed by a digit
+    for (i, _) in lower.char_indices() {
+        if let Some(rest) = lower.get(i..) {
+            if rest.starts_with('q') && rest.len() > 1 {
+                if let Some(next_char) = rest.chars().nth(1) {
+                    if next_char.is_numeric() {
+                        // Found valid quantization pattern
+                        let end = rest.find(|c: char| !c.is_alphanumeric() && c != '_')
+                            .unwrap_or(rest.len());
+                        return Some(rest[..end].to_uppercase());
+                    }
+                }
+            }
         }
     }
 
