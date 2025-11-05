@@ -10,6 +10,7 @@ use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 mod api;
+mod db;
 mod inference;
 mod models;
 mod types;
