@@ -51,6 +51,7 @@ shellexpand = "3.1"
 
 # Database
 sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "macros", "uuid", "migrate"] }
+chrono = "0.4"
 
 # Vector database (Qdrant for better stability)
 qdrant-client = { version = "1.9", features = ["serde"] }

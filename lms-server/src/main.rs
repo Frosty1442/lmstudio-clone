@@ -14,6 +14,7 @@ mod db;
 mod inference;
 mod models;
 mod types;
+mod workspace;
 
 #[derive(Parser, Debug)]
 #[command(name = "lms-server")]
