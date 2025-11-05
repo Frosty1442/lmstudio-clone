@@ -68,17 +68,16 @@ async fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(&models_dir)?;
     info!("Models directory: {}", models_dir.display());
 
-    // Initialize model manager
-    let model_manager = models::ModelManager::new(models_dir).await?;
-
     // Initialize inference engine
-    let inference_engine = inference::InferenceEngine::new();
+    let inference_engine = std::sync::Arc::new(inference::InferenceEngine::new());
+
+    // Initialize model manager
+    let model_manager = std::sync::Arc::new(
+        models::ModelManager::new(models_dir, inference_engine.clone()).await?,
+    );
 
     // Create app state
-    let state = api::AppState {
-        model_manager,
-        inference_engine,
-    };
+    let state = api::AppState { model_manager };
 
     // Build router
     let app = Router::new()

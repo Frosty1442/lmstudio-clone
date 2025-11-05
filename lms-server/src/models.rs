@@ -1,7 +1,8 @@
+use crate::inference::InferenceEngine;
 use crate::types::*;
 use anyhow::Result;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
@@ -10,15 +11,15 @@ use walkdir::WalkDir;
 pub struct ModelManager {
     models_dir: PathBuf,
     models: Arc<RwLock<HashMap<String, Model>>>,
-    loaded_models: Arc<RwLock<HashMap<String, ()>>>, // Placeholder for actual model instances
+    inference_engine: Arc<InferenceEngine>,
 }
 
 impl ModelManager {
-    pub async fn new(models_dir: PathBuf) -> Result<Self> {
+    pub async fn new(models_dir: PathBuf, inference_engine: Arc<InferenceEngine>) -> Result<Self> {
         let manager = Self {
             models_dir: models_dir.clone(),
             models: Arc::new(RwLock::new(HashMap::new())),
-            loaded_models: Arc::new(RwLock::new(HashMap::new())),
+            inference_engine,
         };
 
         // Scan for existing models
@@ -92,7 +93,7 @@ impl ModelManager {
         self.models.read().await.get(id).cloned()
     }
 
-    pub async fn load_model(&self, id: &str, _config: ModelConfig) -> Result<()> {
+    pub async fn load_model(&self, id: &str, config: ModelConfig) -> Result<()> {
         info!("Loading model: {}", id);
 
         let model = self
@@ -103,12 +104,18 @@ impl ModelManager {
             .ok_or_else(|| anyhow::anyhow!("Model not found: {}", id))?
             .clone();
 
-        // TODO: Actually load the model with llama-cpp-2
-        // For now, just mark it as loaded
+        // Load the model with the inference engine
+        self.inference_engine
+            .load_model(
+                id.to_string(),
+                Path::new(&model.path),
+                config.context_size as u32,
+                config.gpu_layers,
+                config.threads,
+            )
+            .await?;
 
-        let mut loaded = self.loaded_models.write().await;
-        loaded.insert(id.to_string(), ());
-
+        // Mark as loaded
         let mut models = self.models.write().await;
         if let Some(m) = models.get_mut(id) {
             m.loaded = true;
@@ -121,9 +128,10 @@ impl ModelManager {
     pub async fn unload_model(&self, id: &str) -> Result<()> {
         info!("Unloading model: {}", id);
 
-        let mut loaded = self.loaded_models.write().await;
-        loaded.remove(id);
+        // Unload from inference engine
+        self.inference_engine.unload_model(id).await?;
 
+        // Mark as unloaded
         let mut models = self.models.write().await;
         if let Some(m) = models.get_mut(id) {
             m.loaded = false;
@@ -134,17 +142,124 @@ impl ModelManager {
     }
 
     pub async fn is_loaded(&self, id: &str) -> bool {
-        self.loaded_models.read().await.contains_key(id)
+        self.inference_engine.is_loaded(id).await
     }
 
     pub async fn get_loaded_models(&self) -> Vec<String> {
-        self.loaded_models.read().await.keys().cloned().collect()
+        let models = self.models.read().await;
+        models
+            .values()
+            .filter(|m| m.loaded)
+            .map(|m| m.id.clone())
+            .collect()
     }
 
-    pub async fn download_model(&self, _request: DownloadModelRequest) -> Result<()> {
-        // TODO: Implement downloading from Hugging Face
-        warn!("Model downloading not yet implemented");
+    pub async fn download_model(&self, request: DownloadModelRequest) -> Result<()> {
+        info!("Downloading model from {}", request.repo);
+
+        // Determine filename
+        let filename = if let Some(f) = request.filename {
+            f
+        } else {
+            // Try to find a GGUF file in the repo
+            let files = self.list_repo_files(&request.repo).await?;
+            let gguf_files: Vec<_> = files.iter().filter(|f| f.ends_with(".gguf")).collect();
+
+            if gguf_files.is_empty() {
+                return Err(anyhow::anyhow!("No GGUF files found in repository"));
+            }
+
+            // If quantization specified, find matching file
+            if let Some(quant) = &request.quantization {
+                gguf_files
+                    .iter()
+                    .find(|f| f.to_lowercase().contains(&quant.to_lowercase()))
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| gguf_files[0].to_string())
+            } else {
+                // Use first GGUF file
+                gguf_files[0].to_string()
+            }
+        };
+
+        info!("Downloading file: {}", filename);
+
+        // Construct Hugging Face URL
+        let url = format!(
+            "https://huggingface.co/{}/resolve/main/{}",
+            request.repo, filename
+        );
+
+        // Create target directory
+        let model_id = format!(
+            "{}-{}",
+            request.repo.replace("/", "-"),
+            filename.replace(".gguf", "")
+        );
+        let target_dir = self.models_dir.join(&model_id);
+        std::fs::create_dir_all(&target_dir)?;
+
+        let target_path = target_dir.join(&filename);
+
+        // Download the file
+        info!("Downloading from {}", url);
+        let response = reqwest::get(&url).await?;
+
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!(
+                "Failed to download: HTTP {}",
+                response.status()
+            ));
+        }
+
+        let mut file = tokio::fs::File::create(&target_path).await?;
+        let mut stream = response.bytes_stream();
+
+        use futures_util::StreamExt;
+        use tokio::io::AsyncWriteExt;
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            file.write_all(&chunk).await?;
+        }
+
+        file.flush().await?;
+        info!("Download complete: {}", target_path.display());
+
+        // Rescan models to pick up the new one
+        self.scan_models().await?;
+
         Ok(())
+    }
+
+    async fn list_repo_files(&self, repo: &str) -> Result<Vec<String>> {
+        // Use Hugging Face API to list files
+        let url = format!("https://huggingface.co/api/models/{}", repo);
+        let response = reqwest::get(&url).await?;
+
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!(
+                "Failed to fetch repo info: HTTP {}",
+                response.status()
+            ));
+        }
+
+        let json: serde_json::Value = response.json().await?;
+
+        // Extract file names from siblings array
+        let files: Vec<String> = json["siblings"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .filter_map(|s| s["rfilename"].as_str().map(|s| s.to_string()))
+            .collect();
+
+        Ok(files)
+    }
+
+    // Expose inference engine methods
+    pub fn inference_engine(&self) -> &Arc<InferenceEngine> {
+        &self.inference_engine
     }
 }
 

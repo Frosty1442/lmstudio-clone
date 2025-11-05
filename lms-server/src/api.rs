@@ -1,4 +1,3 @@
-use crate::inference::InferenceEngine;
 use crate::models::ModelManager;
 use crate::types::*;
 use axum::{
@@ -15,8 +14,7 @@ use tracing::error;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub model_manager: ModelManager,
-    pub inference_engine: InferenceEngine,
+    pub model_manager: Arc<ModelManager>,
 }
 
 // Health check
@@ -73,39 +71,42 @@ pub async fn chat_completions(
     if req.stream {
         // Streaming response
         let stream = state
-            .inference_engine
+            .model_manager
+            .inference_engine()
             .generate_stream(&req.model, &prompt, temperature, max_tokens)
             .await
             .map_err(|e| AppError::InferenceError(e.to_string()))?;
 
         let model = req.model.clone();
-        let sse_stream = futures_util::stream::iter(stream)
-            .await
-            .map(move |token| {
-                let chunk = ChatCompletionResponse {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    object: "chat.completion.chunk".to_string(),
-                    created: current_timestamp(),
-                    model: model.clone(),
-                    choices: vec![ChatChoice {
-                        index: 0,
-                        message: None,
-                        delta: Some(ChatMessage {
-                            role: "assistant".to_string(),
-                            content: token,
-                        }),
-                        finish_reason: None,
-                    }],
-                    usage: None,
-                };
-                Ok::<_, Infallible>(axum::response::sse::Event::default().json_data(chunk).unwrap())
-            });
+        let id = uuid::Uuid::new_v4().to_string();
+
+        // Map the token stream to SSE events
+        let sse_stream = stream.map(move |token| {
+            let chunk = ChatCompletionResponse {
+                id: id.clone(),
+                object: "chat.completion.chunk".to_string(),
+                created: current_timestamp(),
+                model: model.clone(),
+                choices: vec![ChatChoice {
+                    index: 0,
+                    message: None,
+                    delta: Some(ChatMessage {
+                        role: "assistant".to_string(),
+                        content: token,
+                    }),
+                    finish_reason: None,
+                }],
+                usage: None,
+            };
+            Ok::<_, Infallible>(axum::response::sse::Event::default().json_data(chunk).unwrap())
+        });
 
         Ok(Sse::new(sse_stream).into_response())
     } else {
         // Non-streaming response
         let content = state
-            .inference_engine
+            .model_manager
+            .inference_engine()
             .generate(&req.model, &prompt, temperature, max_tokens)
             .await
             .map_err(|e| AppError::InferenceError(e.to_string()))?;
@@ -152,7 +153,8 @@ pub async fn completions(
     let max_tokens = req.max_tokens.unwrap_or(2048);
 
     let content = state
-        .inference_engine
+        .model_manager
+        .inference_engine()
         .generate(&req.model, &req.prompt, temperature, max_tokens)
         .await
         .map_err(|e| AppError::InferenceError(e.to_string()))?;
@@ -171,17 +173,69 @@ pub async fn completions(
     .into_response())
 }
 
-// Embeddings (placeholder)
-pub async fn embeddings(Json(_req): Json<EmbeddingRequest>) -> impl IntoResponse {
-    Json(serde_json::json!({
+// Embeddings
+pub async fn embeddings(
+    State(state): State<AppState>,
+    Json(req): Json<EmbeddingRequest>,
+) -> Result<Response, AppError> {
+    // Check if model is loaded
+    if !state.model_manager.is_loaded(&req.model).await {
+        // Try to auto-load
+        state
+            .model_manager
+            .load_model(&req.model, ModelConfig::default())
+            .await
+            .map_err(|e| AppError::ModelNotFound(e.to_string()))?;
+    }
+
+    // Handle both string and array of strings
+    let texts = match req.input {
+        serde_json::Value::String(s) => vec![s],
+        serde_json::Value::Array(arr) => arr
+            .into_iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect(),
+        _ => {
+            return Err(AppError::InvalidRequest(
+                "Input must be string or array of strings".to_string(),
+            ))
+        }
+    };
+
+    // Generate embeddings
+    let embeddings = state
+        .model_manager
+        .inference_engine()
+        .generate_embeddings(&req.model, texts.clone())
+        .await
+        .map_err(|e| AppError::InferenceError(e.to_string()))?;
+
+    // Format response
+    let data: Vec<_> = embeddings
+        .into_iter()
+        .enumerate()
+        .map(|(i, embedding)| {
+            serde_json::json!({
+                "object": "embedding",
+                "embedding": embedding,
+                "index": i
+            })
+        })
+        .collect();
+
+    // Calculate token usage (approximate)
+    let total_tokens: usize = texts.iter().map(|t| t.split_whitespace().count()).sum();
+
+    Ok(Json(serde_json::json!({
         "object": "list",
-        "data": [],
-        "model": "placeholder",
+        "data": data,
+        "model": req.model,
         "usage": {
-            "prompt_tokens": 0,
-            "total_tokens": 0
+            "prompt_tokens": total_tokens,
+            "total_tokens": total_tokens
         }
     }))
+    .into_response())
 }
 
 // Load model
