@@ -276,3 +276,110 @@ fn extract_quantization(filename: &str) -> Option<String> {
 
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_extract_quantization() {
+        assert_eq!(extract_quantization("model-q4_k_m.gguf"), Some("Q4_K_M".to_string()));
+        assert_eq!(extract_quantization("llama-2-7b-q5_k_s.gguf"), Some("Q5_K_S".to_string()));
+        assert_eq!(extract_quantization("model-Q8_0.gguf"), Some("Q8_0".to_string()));
+        assert_eq!(extract_quantization("model.gguf"), None);
+        assert_eq!(extract_quantization("no-quant-here"), None);
+    }
+
+    #[tokio::test]
+    async fn test_model_manager_scan_models() {
+        let temp_dir = TempDir::new().unwrap();
+        let models_path = temp_dir.path().to_path_buf();
+
+        // Create a fake GGUF file
+        let model_dir = models_path.join("test-model");
+        std::fs::create_dir_all(&model_dir).unwrap();
+        let model_file = model_dir.join("model-q4_k_m.gguf");
+        std::fs::write(&model_file, b"fake model data").unwrap();
+
+        let inference_engine = Arc::new(InferenceEngine::new());
+        let manager = ModelManager::new(models_path, inference_engine).await.unwrap();
+
+        let models = manager.list_models().await;
+        assert_eq!(models.len(), 1);
+        assert!(models[0].id.contains("model-q4_k_m"));
+        assert_eq!(models[0].quantization, Some("Q4_K_M".to_string()));
+        assert_eq!(models[0].format, ModelFormat::GGUF);
+        assert!(!models[0].loaded);
+    }
+
+    #[tokio::test]
+    async fn test_model_manager_get_model() {
+        let temp_dir = TempDir::new().unwrap();
+        let models_path = temp_dir.path().to_path_buf();
+
+        // Create a fake GGUF file
+        let model_file = models_path.join("test.gguf");
+        std::fs::create_dir_all(&models_path).unwrap();
+        std::fs::write(&model_file, b"fake model").unwrap();
+
+        let inference_engine = Arc::new(InferenceEngine::new());
+        let manager = ModelManager::new(models_path, inference_engine).await.unwrap();
+
+        let models = manager.list_models().await;
+        assert!(!models.is_empty());
+
+        let model_id = &models[0].id;
+        let retrieved = manager.get_model(model_id).await;
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().id, *model_id);
+
+        let not_found = manager.get_model("nonexistent").await;
+        assert!(not_found.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_model_manager_empty_directory() {
+        let temp_dir = TempDir::new().unwrap();
+        let models_path = temp_dir.path().to_path_buf();
+        std::fs::create_dir_all(&models_path).unwrap();
+
+        let inference_engine = Arc::new(InferenceEngine::new());
+        let manager = ModelManager::new(models_path, inference_engine).await.unwrap();
+
+        let models = manager.list_models().await;
+        assert_eq!(models.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_model_manager_multiple_formats() {
+        let temp_dir = TempDir::new().unwrap();
+        let models_path = temp_dir.path().to_path_buf();
+        std::fs::create_dir_all(&models_path).unwrap();
+
+        // Create files with different formats
+        std::fs::write(models_path.join("model1.gguf"), b"data").unwrap();
+        std::fs::write(models_path.join("model2.ggml"), b"data").unwrap();
+        std::fs::write(models_path.join("model3.bin"), b"data").unwrap();
+        std::fs::write(models_path.join("readme.txt"), b"ignore").unwrap();
+
+        let inference_engine = Arc::new(InferenceEngine::new());
+        let manager = ModelManager::new(models_path, inference_engine).await.unwrap();
+
+        let models = manager.list_models().await;
+        assert_eq!(models.len(), 3); // Only gguf, ggml, and bin files
+    }
+
+    #[tokio::test]
+    async fn test_get_loaded_models() {
+        let temp_dir = TempDir::new().unwrap();
+        let models_path = temp_dir.path().to_path_buf();
+        std::fs::create_dir_all(&models_path).unwrap();
+
+        let inference_engine = Arc::new(InferenceEngine::new());
+        let manager = ModelManager::new(models_path, inference_engine).await.unwrap();
+
+        let loaded = manager.get_loaded_models().await;
+        assert_eq!(loaded.len(), 0);
+    }
+}
