@@ -1,3 +1,4 @@
+use crate::chat_sessions::{ChatSessionManager, CreateSessionRequest, AddMessageRequest};
 use crate::document_manager::{DocumentManager, UploadDocumentRequest};
 use crate::models::ModelManager;
 use crate::rag::{RAGEngine, RAGRequest};
@@ -20,6 +21,7 @@ use tracing::error;
 pub struct AppState {
     pub model_manager: Arc<ModelManager>,
     pub workspace_manager: Arc<WorkspaceManager>,
+    pub chat_session_manager: Arc<ChatSessionManager>,
     pub document_manager: Arc<DocumentManager>,
     pub rag_engine: Arc<RAGEngine>,
 }
@@ -586,6 +588,117 @@ pub async fn rag_chat(
     })))
 }
 
+// ============================================================================
+// Chat Session Management Endpoints
+// ============================================================================
+
+/// Create a new chat session
+pub async fn create_chat_session(
+    State(state): State<AppState>,
+    Path(workspace_id): Path<String>,
+    Json(req): Json<CreateSessionRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let session = state
+        .chat_session_manager
+        .create_session(&workspace_id, req)
+        .await
+        .map_err(|e| AppError::InvalidRequest(e.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "session": session
+    })))
+}
+
+/// List chat sessions in workspace
+pub async fn list_chat_sessions(
+    State(state): State<AppState>,
+    Path(workspace_id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let sessions = state
+        .chat_session_manager
+        .list_sessions(&workspace_id)
+        .await
+        .map_err(|e| AppError::InferenceError(e.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "workspace_id": workspace_id,
+        "sessions": sessions
+    })))
+}
+
+/// Get chat session by ID
+pub async fn get_chat_session(
+    State(state): State<AppState>,
+    Path((_workspace_id, session_id)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let session = state
+        .chat_session_manager
+        .get_session(&session_id)
+        .await
+        .map_err(|e| AppError::InferenceError(e.to_string()))?
+        .ok_or_else(|| AppError::InvalidRequest(format!("Session {} not found", session_id)))?;
+
+    Ok(Json(serde_json::json!({
+        "session": session
+    })))
+}
+
+/// Get chat session with messages
+pub async fn get_chat_session_with_messages(
+    State(state): State<AppState>,
+    Path((_workspace_id, session_id)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let result = state
+        .chat_session_manager
+        .get_session_with_messages(&session_id)
+        .await
+        .map_err(|e| AppError::InferenceError(e.to_string()))?
+        .ok_or_else(|| AppError::InvalidRequest(format!("Session {} not found", session_id)))?;
+
+    let (session, messages) = result;
+
+    Ok(Json(serde_json::json!({
+        "session": session,
+        "messages": messages
+    })))
+}
+
+/// Delete chat session
+pub async fn delete_chat_session(
+    State(state): State<AppState>,
+    Path((_workspace_id, session_id)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    state
+        .chat_session_manager
+        .delete_session(&session_id)
+        .await
+        .map_err(|e| AppError::InferenceError(e.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": format!("Session {} deleted", session_id)
+    })))
+}
+
+/// Add message to chat session
+pub async fn add_chat_message(
+    State(state): State<AppState>,
+    Path((_workspace_id, session_id)): Path<(String, String)>,
+    Json(req): Json<AddMessageRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let message = state
+        .chat_session_manager
+        .add_message(&session_id, req)
+        .await
+        .map_err(|e| AppError::InferenceError(e.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": message
+    })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -619,6 +732,9 @@ mod tests {
         let database = Arc::new(Database::new(&db_path).await.unwrap());
         let workspace_manager = Arc::new(WorkspaceManager::new(database.pool().clone()));
 
+        // Create chat session manager
+        let chat_session_manager = Arc::new(ChatSessionManager::new(database.pool().clone()));
+
         // Create inference engine
         let inference_engine = Arc::new(InferenceEngine::new());
 
@@ -646,6 +762,7 @@ mod tests {
         let state = AppState {
             model_manager,
             workspace_manager,
+            chat_session_manager,
             document_manager,
             rag_engine,
         };

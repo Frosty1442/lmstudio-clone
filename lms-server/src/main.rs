@@ -10,6 +10,7 @@ use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 mod api;
+mod chat_sessions;
 mod db;
 mod document_manager;
 mod documents;
@@ -87,6 +88,12 @@ async fn main() -> anyhow::Result<()> {
         workspace::WorkspaceManager::new(database.pool().clone())
     );
 
+    // Initialize chat session manager
+    let chat_session_manager = std::sync::Arc::new(
+        chat_sessions::ChatSessionManager::new(database.pool().clone())
+    );
+    info!("Chat session manager initialized");
+
     // Initialize inference engine
     let inference_engine = std::sync::Arc::new(inference::InferenceEngine::new());
 
@@ -129,6 +136,7 @@ async fn main() -> anyhow::Result<()> {
     let state = api::AppState {
         model_manager,
         workspace_manager,
+        chat_session_manager,
         document_manager,
         rag_engine,
     };
@@ -162,6 +170,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/workspaces/:workspace_id/documents/:document_id", axum::routing::delete(api::delete_document))
         // RAG chat endpoint
         .route("/v1/workspaces/:id/chat", post(api::rag_chat))
+        // Chat session management endpoints
+        .route("/v1/workspaces/:id/sessions", post(api::create_chat_session))
+        .route("/v1/workspaces/:id/sessions", get(api::list_chat_sessions))
+        .route("/v1/workspaces/:workspace_id/sessions/:session_id", get(api::get_chat_session))
+        .route("/v1/workspaces/:workspace_id/sessions/:session_id/messages", get(api::get_chat_session_with_messages))
+        .route("/v1/workspaces/:workspace_id/sessions/:session_id", axum::routing::delete(api::delete_chat_session))
+        .route("/v1/workspaces/:workspace_id/sessions/:session_id/messages", post(api::add_chat_message))
         // Status endpoint
         .route("/v1/status", get(api::server_status))
         .layer(CorsLayer::permissive())
