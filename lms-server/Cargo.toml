@@ -56,15 +56,15 @@ chrono = "0.4"
 # Vector database (Qdrant for better stability)
 qdrant-client = { version = "1.9", features = ["serde"] }
 
-# Document parsing
-pdf-extract = "0.7"
-lopdf = "0.32"
-docx-rs = "0.4"
-html2text = "0.12"
-scraper = "0.19"
+# Document parsing (TODO: Add back when system dependencies available)
+# pdf-extract = "0.7"      # Requires GTK/GDK system libraries
+# lopdf = "0.32"           # Alternative PDF parser
+# docx-rs = "0.4"          # Requires additional dependencies
+# html2text = "0.12"       # Requires libsoup
+# scraper = "0.19"         # Requires libsoup
 
 # Text processing
-tiktoken-rs = "0.5"
+# tiktoken-rs = "0.5"      # TODO: Add back when needed for token counting
 unicode-segmentation = "1.11"
 
 # Multipart form data

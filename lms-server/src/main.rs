@@ -14,6 +14,7 @@ mod db;
 mod inference;
 mod models;
 mod types;
+mod vector_store;
 mod workspace;
 
 #[derive(Parser, Debug)]
