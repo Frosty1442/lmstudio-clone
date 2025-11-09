@@ -11,6 +11,7 @@ use tracing_subscriber::FmtSubscriber;
 
 mod api;
 mod db;
+mod documents;
 mod inference;
 mod models;
 mod types;
