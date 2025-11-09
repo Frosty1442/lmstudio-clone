@@ -1,5 +1,6 @@
 use crate::models::ModelManager;
 use crate::types::*;
+use crate::workspace::{WorkspaceManager, CreateWorkspaceRequest, UpdateWorkspaceRequest};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -16,6 +17,7 @@ use tracing::error;
 #[derive(Clone)]
 pub struct AppState {
     pub model_manager: Arc<ModelManager>,
+    pub workspace_manager: Arc<WorkspaceManager>,
 }
 
 // Health check
@@ -364,6 +366,111 @@ impl IntoResponse for AppError {
     }
 }
 
+// ============================================================================
+// Workspace Management Endpoints
+// ============================================================================
+
+/// Create a new workspace
+pub async fn create_workspace(
+    State(state): State<AppState>,
+    Json(req): Json<CreateWorkspaceRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let workspace = state
+        .workspace_manager
+        .create(req)
+        .await
+        .map_err(|e| AppError::InvalidRequest(e.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "workspace": workspace
+    })))
+}
+
+/// List all workspaces
+pub async fn list_workspaces(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let workspaces = state
+        .workspace_manager
+        .list()
+        .await
+        .map_err(|e| AppError::InferenceError(e.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "workspaces": workspaces
+    })))
+}
+
+/// Get workspace by ID
+pub async fn get_workspace(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let workspace = state
+        .workspace_manager
+        .get(&id)
+        .await
+        .map_err(|e| AppError::InferenceError(e.to_string()))?
+        .ok_or_else(|| AppError::ModelNotFound(format!("Workspace not found: {}", id)))?;
+
+    Ok(Json(serde_json::json!({
+        "workspace": workspace
+    })))
+}
+
+/// Update workspace
+pub async fn update_workspace(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<UpdateWorkspaceRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let workspace = state
+        .workspace_manager
+        .update(&id, req)
+        .await
+        .map_err(|e| AppError::InvalidRequest(e.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "workspace": workspace
+    })))
+}
+
+/// Delete workspace
+pub async fn delete_workspace(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    state
+        .workspace_manager
+        .delete(&id)
+        .await
+        .map_err(|e| AppError::InvalidRequest(e.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": format!("Workspace {} deleted", id)
+    })))
+}
+
+/// Get workspace statistics
+pub async fn workspace_stats(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let stats = state
+        .workspace_manager
+        .get_stats(&id)
+        .await
+        .map_err(|e| AppError::InferenceError(e.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "workspace_id": id,
+        "stats": stats
+    })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -378,9 +485,35 @@ mod tests {
     use tempfile::TempDir;
     use http_body_util::BodyExt;
 
-    fn create_test_app(model_manager: Arc<ModelManager>) -> Router {
-        let state = AppState { model_manager };
+    async fn create_test_state() -> (AppState, TempDir) {
+        use crate::db::Database;
 
+        let temp_dir = TempDir::new().unwrap();
+        let models_path = temp_dir.path().join("models");
+        let db_path = temp_dir.path().join("test.db");
+
+        std::fs::create_dir_all(&models_path).unwrap();
+
+        // Create a dummy model file
+        std::fs::write(models_path.join("test.gguf"), b"test data").unwrap();
+
+        // Create database and workspace manager
+        let database = Arc::new(Database::new(&db_path).await.unwrap());
+        let workspace_manager = Arc::new(WorkspaceManager::new(database.pool().clone()));
+
+        // Create model manager
+        let inference_engine = Arc::new(InferenceEngine::new());
+        let model_manager = Arc::new(ModelManager::new(models_path, inference_engine).await.unwrap());
+
+        let state = AppState {
+            model_manager,
+            workspace_manager,
+        };
+
+        (state, temp_dir)
+    }
+
+    fn create_test_app(state: AppState) -> Router {
         Router::new()
             .route("/health", get(health))
             .route("/v1/models", get(list_models))
@@ -389,27 +522,10 @@ mod tests {
             .with_state(state)
     }
 
-    async fn create_test_model_manager() -> Arc<ModelManager> {
-        let temp_dir = TempDir::new().unwrap();
-        let models_path = temp_dir.path().to_path_buf();
-        std::fs::create_dir_all(&models_path).unwrap();
-
-        // Create a dummy model file
-        std::fs::write(models_path.join("test.gguf"), b"test data").unwrap();
-
-        let inference_engine = Arc::new(InferenceEngine::new());
-        let manager = ModelManager::new(models_path, inference_engine).await.unwrap();
-
-        // Leak the temp_dir so it doesn't get deleted
-        std::mem::forget(temp_dir);
-
-        Arc::new(manager)
-    }
-
     #[tokio::test]
     async fn test_health_endpoint() {
-        let manager = create_test_model_manager().await;
-        let app = create_test_app(manager);
+        let (state, _temp) = create_test_state().await;
+        let app = create_test_app(state);
 
         let response = app
             .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
@@ -426,8 +542,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_models_endpoint() {
-        let manager = create_test_model_manager().await;
-        let app = create_test_app(manager);
+        let (state, _temp) = create_test_state().await;
+        let app = create_test_app(state);
 
         let response = app
             .oneshot(Request::builder().uri("/v1/models").body(Body::empty()).unwrap())
@@ -445,8 +561,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_server_status_endpoint() {
-        let manager = create_test_model_manager().await;
-        let app = create_test_app(manager);
+        let (state, _temp) = create_test_state().await;
+        let app = create_test_app(state);
 
         let response = app
             .oneshot(Request::builder().uri("/status").body(Body::empty()).unwrap())
@@ -465,8 +581,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_all_models_endpoint() {
-        let manager = create_test_model_manager().await;
-        let app = create_test_app(manager);
+        let (state, _temp) = create_test_state().await;
+        let app = create_test_app(state);
 
         let response = app
             .oneshot(Request::builder().uri("/v1/models/list").body(Body::empty()).unwrap())
