@@ -1,4 +1,6 @@
+use crate::document_manager::{DocumentManager, UploadDocumentRequest};
 use crate::models::ModelManager;
+use crate::rag::{RAGEngine, RAGRequest};
 use crate::types::*;
 use crate::workspace::{WorkspaceManager, CreateWorkspaceRequest, UpdateWorkspaceRequest};
 use axum::{
@@ -18,6 +20,8 @@ use tracing::error;
 pub struct AppState {
     pub model_manager: Arc<ModelManager>,
     pub workspace_manager: Arc<WorkspaceManager>,
+    pub document_manager: Arc<DocumentManager>,
+    pub rag_engine: Arc<RAGEngine>,
 }
 
 // Health check
@@ -471,6 +475,117 @@ pub async fn workspace_stats(
     })))
 }
 
+// ============================================================================
+// Document Management Endpoints
+// ============================================================================
+
+/// Upload document to workspace
+pub async fn upload_document(
+    State(state): State<AppState>,
+    Path(workspace_id): Path<String>,
+    Json(req): Json<UploadDocumentRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    // Get workspace to find embedding model
+    let workspace = state
+        .workspace_manager
+        .get(&workspace_id)
+        .await
+        .map_err(|e| AppError::InvalidRequest(e.to_string()))?
+        .ok_or_else(|| AppError::InvalidRequest(format!("Workspace {} not found", workspace_id)))?;
+
+    let embedding_model = workspace
+        .embedding_model_id
+        .as_ref()
+        .ok_or_else(|| {
+            AppError::InvalidRequest("No embedding model configured for workspace".to_string())
+        })?;
+
+    // Upload and process document
+    let response = state
+        .document_manager
+        .upload_document(&workspace_id, embedding_model, req)
+        .await
+        .map_err(|e| AppError::InferenceError(e.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "document": response
+    })))
+}
+
+/// List documents in workspace
+pub async fn list_documents(
+    State(state): State<AppState>,
+    Path(workspace_id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let documents = state
+        .document_manager
+        .list_documents(&workspace_id)
+        .await
+        .map_err(|e| AppError::InferenceError(e.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "workspace_id": workspace_id,
+        "documents": documents
+    })))
+}
+
+/// Get document by ID
+pub async fn get_document(
+    State(state): State<AppState>,
+    Path((_workspace_id, document_id)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let document = state
+        .document_manager
+        .get_document(&document_id)
+        .await
+        .map_err(|e| AppError::InferenceError(e.to_string()))?
+        .ok_or_else(|| AppError::InvalidRequest(format!("Document {} not found", document_id)))?;
+
+    Ok(Json(serde_json::json!({
+        "document": document
+    })))
+}
+
+/// Delete document
+pub async fn delete_document(
+    State(state): State<AppState>,
+    Path((workspace_id, document_id)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    state
+        .document_manager
+        .delete_document(&workspace_id, &document_id)
+        .await
+        .map_err(|e| AppError::InferenceError(e.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": format!("Document {} deleted", document_id)
+    })))
+}
+
+// ============================================================================
+// RAG Chat Endpoints
+// ============================================================================
+
+/// Chat with workspace using RAG
+pub async fn rag_chat(
+    State(state): State<AppState>,
+    Path(workspace_id): Path<String>,
+    Json(req): Json<RAGRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let response = state
+        .rag_engine
+        .generate_with_citations(&workspace_id, req)
+        .await
+        .map_err(|e| AppError::InferenceError(e.to_string()))?;
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "response": response
+    })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -487,12 +602,15 @@ mod tests {
 
     async fn create_test_state() -> (AppState, TempDir) {
         use crate::db::Database;
+        use crate::vector_store::VectorStore;
 
         let temp_dir = TempDir::new().unwrap();
         let models_path = temp_dir.path().join("models");
         let db_path = temp_dir.path().join("test.db");
+        let docs_path = temp_dir.path().join("documents");
 
         std::fs::create_dir_all(&models_path).unwrap();
+        std::fs::create_dir_all(&docs_path).unwrap();
 
         // Create a dummy model file
         std::fs::write(models_path.join("test.gguf"), b"test data").unwrap();
@@ -501,13 +619,35 @@ mod tests {
         let database = Arc::new(Database::new(&db_path).await.unwrap());
         let workspace_manager = Arc::new(WorkspaceManager::new(database.pool().clone()));
 
-        // Create model manager
+        // Create inference engine
         let inference_engine = Arc::new(InferenceEngine::new());
-        let model_manager = Arc::new(ModelManager::new(models_path, inference_engine).await.unwrap());
+
+        // Create model manager
+        let model_manager = Arc::new(ModelManager::new(models_path, inference_engine.clone()).await.unwrap());
+
+        // Create vector store
+        let vector_store = Arc::new(VectorStore::new("http://localhost:6333"));
+
+        // Create document manager
+        let document_manager = Arc::new(DocumentManager::new(
+            database.pool().clone(),
+            vector_store.clone(),
+            inference_engine.clone(),
+            docs_path,
+        ));
+
+        // Create RAG engine
+        let rag_engine = Arc::new(RAGEngine::new(
+            vector_store,
+            workspace_manager.clone(),
+            inference_engine,
+        ));
 
         let state = AppState {
             model_manager,
             workspace_manager,
+            document_manager,
+            rag_engine,
         };
 
         (state, temp_dir)

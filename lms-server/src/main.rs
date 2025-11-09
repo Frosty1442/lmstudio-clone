@@ -11,9 +11,11 @@ use tracing_subscriber::FmtSubscriber;
 
 mod api;
 mod db;
+mod document_manager;
 mod documents;
 mod inference;
 mod models;
+mod rag;
 mod types;
 mod vector_store;
 mod workspace;
@@ -93,10 +95,42 @@ async fn main() -> anyhow::Result<()> {
         models::ModelManager::new(models_dir, inference_engine.clone()).await?,
     );
 
+    // Initialize vector store
+    let vector_store = std::sync::Arc::new(vector_store::VectorStore::new("http://localhost:6333"));
+    info!("Vector store initialized (Qdrant at http://localhost:6333)");
+
+    // Initialize document manager
+    let documents_dir = dirs::home_dir()
+        .expect("Could not find home directory")
+        .join(".lmstudio-clone")
+        .join("documents");
+    std::fs::create_dir_all(&documents_dir)?;
+    let document_manager = std::sync::Arc::new(
+        document_manager::DocumentManager::new(
+            database.pool().clone(),
+            vector_store.clone(),
+            inference_engine.clone(),
+            documents_dir.clone(),
+        )
+    );
+    info!("Document manager initialized (storage: {})", documents_dir.display());
+
+    // Initialize RAG engine
+    let rag_engine = std::sync::Arc::new(
+        rag::RAGEngine::new(
+            vector_store.clone(),
+            workspace_manager.clone(),
+            inference_engine.clone(),
+        )
+    );
+    info!("RAG engine initialized");
+
     // Create app state
     let state = api::AppState {
         model_manager,
         workspace_manager,
+        document_manager,
+        rag_engine,
     };
 
     // Build router
@@ -121,6 +155,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/workspaces/:id", axum::routing::patch(api::update_workspace))
         .route("/v1/workspaces/:id", axum::routing::delete(api::delete_workspace))
         .route("/v1/workspaces/:id/stats", get(api::workspace_stats))
+        // Document management endpoints
+        .route("/v1/workspaces/:id/documents", post(api::upload_document))
+        .route("/v1/workspaces/:id/documents", get(api::list_documents))
+        .route("/v1/workspaces/:workspace_id/documents/:document_id", get(api::get_document))
+        .route("/v1/workspaces/:workspace_id/documents/:document_id", axum::routing::delete(api::delete_document))
+        // RAG chat endpoint
+        .route("/v1/workspaces/:id/chat", post(api::rag_chat))
         // Status endpoint
         .route("/v1/status", get(api::server_status))
         .layer(CorsLayer::permissive())

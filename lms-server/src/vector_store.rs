@@ -29,7 +29,7 @@ pub struct SearchResult {
 }
 
 /// Advanced filtering options for vector search
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SearchFilters {
     /// Filter by specific document IDs
     pub document_ids: Option<Vec<String>>,

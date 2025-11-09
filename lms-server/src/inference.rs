@@ -36,6 +36,13 @@ struct LlamaCompletionResponse {
     stop: bool,
 }
 
+/// Response from completion with metadata
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompletionResponse {
+    pub content: String,
+    pub tokens_used: Option<i32>,
+}
+
 pub struct ModelProcess {
     child: Child,
     port: u16,
@@ -303,6 +310,19 @@ impl InferenceEngine {
         temperature: f32,
         max_tokens: usize,
     ) -> Result<String> {
+        let response = self
+            .generate_completion(model_id, prompt, temperature, max_tokens as i32)
+            .await?;
+        Ok(response.content)
+    }
+
+    pub async fn generate_completion(
+        &self,
+        model_id: &str,
+        prompt: &str,
+        temperature: f32,
+        max_tokens: i32,
+    ) -> Result<CompletionResponse> {
         info!("Generating response for model {}", model_id);
 
         let processes = self.processes.read().await;
@@ -317,7 +337,7 @@ impl InferenceEngine {
         let url = format!("http://localhost:{}/completion", port);
         let request = LlamaCompletionRequest {
             prompt: prompt.to_string(),
-            n_predict: max_tokens as i32,
+            n_predict: max_tokens,
             temperature,
             stream: false,
             n_keep: None,
@@ -337,7 +357,13 @@ impl InferenceEngine {
         }
 
         let completion: LlamaCompletionResponse = response.json().await?;
-        Ok(completion.content)
+
+        // Note: llama-server doesn't return token counts in the basic response
+        // This could be enhanced by parsing the verbose output
+        Ok(CompletionResponse {
+            content: completion.content,
+            tokens_used: None,
+        })
     }
 
     pub async fn generate_stream(
