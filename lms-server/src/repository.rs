@@ -134,6 +134,7 @@ pub struct AddMessageRequest {
 // ============================================================================
 
 /// Unified repository for all database operations
+#[derive(Clone)]
 pub struct Repository {
     pool: SqlitePool,
 }

@@ -10,7 +10,6 @@ use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 mod api;
-mod chat_sessions;
 mod db;
 mod document_manager;
 mod documents;
@@ -20,7 +19,6 @@ mod rag;
 mod repository;
 mod types;
 mod vector_store;
-mod workspace;
 
 #[derive(Parser, Debug)]
 #[command(name = "lms-server")]
@@ -84,28 +82,20 @@ async fn main() -> anyhow::Result<()> {
     let database = std::sync::Arc::new(db::Database::new(&db_path).await?);
     info!("Database initialized at: {}", db_path.display());
 
-    // Initialize workspace manager
-    let workspace_manager = std::sync::Arc::new(
-        workspace::WorkspaceManager::new(database.pool().clone())
-    );
-
-    // Initialize chat session manager
-    let chat_session_manager = std::sync::Arc::new(
-        chat_sessions::ChatSessionManager::new(database.pool().clone())
-    );
-    info!("Chat session manager initialized");
+    // Initialize repository (consolidates workspace, chat session, document DB operations)
+    let repository = repository::Repository::new(database.pool().clone());
+    info!("Repository initialized");
 
     // Initialize inference engine
     let inference_engine = std::sync::Arc::new(inference::InferenceEngine::new());
 
     // Initialize model manager
-    let model_manager = std::sync::Arc::new(
-        models::ModelManager::new(models_dir, inference_engine.clone()).await?,
-    );
+    let model_manager = models::ModelManager::new(models_dir, inference_engine.clone()).await?;
+    info!("Model manager initialized");
 
-    // Initialize vector store
-    let vector_store = std::sync::Arc::new(vector_store::VectorStore::new("http://localhost:6333"));
-    info!("Vector store initialized (Qdrant at http://localhost:6333)");
+    // Initialize vector store (SQLite-based, no external server needed!)
+    let vector_store = std::sync::Arc::new(vector_store::VectorStore::new(database.pool().clone()));
+    info!("Vector store initialized (SQLite embedded)");
 
     // Initialize document manager
     let documents_dir = dirs::home_dir()
@@ -113,34 +103,30 @@ async fn main() -> anyhow::Result<()> {
         .join(".lmstudio-clone")
         .join("documents");
     std::fs::create_dir_all(&documents_dir)?;
-    let document_manager = std::sync::Arc::new(
-        document_manager::DocumentManager::new(
-            database.pool().clone(),
-            vector_store.clone(),
-            inference_engine.clone(),
-            documents_dir.clone(),
-        )
+    let document_manager = document_manager::DocumentManager::new(
+        database.pool().clone(),
+        &repository,
+        vector_store.clone(),
+        inference_engine.clone(),
+        documents_dir.clone(),
     );
     info!("Document manager initialized (storage: {})", documents_dir.display());
 
     // Initialize RAG engine
-    let rag_engine = std::sync::Arc::new(
-        rag::RAGEngine::new(
-            vector_store.clone(),
-            workspace_manager.clone(),
-            inference_engine.clone(),
-        )
+    let rag_engine = rag::RAGEngine::new(
+        vector_store.clone(),
+        &repository,
+        inference_engine.clone(),
     );
     info!("RAG engine initialized");
 
-    // Create app state
-    let state = api::AppState {
+    // Create app state with grouped services
+    let state = api::AppState::new(api::Services {
+        repository,
         model_manager,
-        workspace_manager,
-        chat_session_manager,
         document_manager,
         rag_engine,
-    };
+    });
 
     // Build router
     let app = Router::new()

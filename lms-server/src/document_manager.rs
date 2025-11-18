@@ -1,5 +1,6 @@
 use crate::documents::{TextChunker, ChunkConfig};
 use crate::inference::InferenceEngine;
+use crate::repository::Repository;
 use crate::vector_store::{ChunkMetadata, VectorStore};
 use anyhow::{anyhow, Result};
 use chrono::Utc;
@@ -60,6 +61,7 @@ pub struct UploadDocumentResponse {
 /// Manages document uploads and processing
 pub struct DocumentManager {
     pool: SqlitePool,
+    repository: Repository,
     vector_store: Arc<VectorStore>,
     inference_engine: Arc<InferenceEngine>,
     text_chunker: TextChunker,
@@ -69,6 +71,7 @@ pub struct DocumentManager {
 impl DocumentManager {
     pub fn new(
         pool: SqlitePool,
+        repository: &Repository,
         vector_store: Arc<VectorStore>,
         inference_engine: Arc<InferenceEngine>,
         storage_path: PathBuf,
@@ -77,6 +80,7 @@ impl DocumentManager {
 
         Self {
             pool,
+            repository: repository.clone(),
             vector_store,
             inference_engine,
             text_chunker: TextChunker::new(ChunkConfig::default()),
@@ -107,15 +111,16 @@ impl DocumentManager {
 
         // Create document record (status: processing)
         let file_size = request.content.len() as i64;
-        self.create_document_record(
-            &document_id,
-            workspace_id,
-            &request.filename,
-            &file_path,
-            &file_type,
-            file_size,
-        )
-        .await?;
+        self.repository
+            .create_document(
+                &document_id,
+                workspace_id,
+                &request.filename,
+                &file_path,
+                &file_type,
+                file_size,
+            )
+            .await?;
 
         // Process document in background (chunk + embed + store)
         match self
@@ -131,7 +136,8 @@ impl DocumentManager {
         {
             Ok(chunk_count) => {
                 // Update status to ready
-                self.update_document_status(&document_id, "ready", None, Some(chunk_count as i32))
+                self.repository
+                    .update_document_status(&document_id, "ready", None, Some(chunk_count as i32))
                     .await?;
 
                 Ok(UploadDocumentResponse {
@@ -142,7 +148,8 @@ impl DocumentManager {
             }
             Err(e) => {
                 warn!("Failed to process document {}: {}", document_id, e);
-                self.update_document_status(&document_id, "error", Some(&e.to_string()), None)
+                self.repository
+                    .update_document_status(&document_id, "error", Some(&e.to_string()), None)
                     .await?;
 
                 Err(e)
@@ -167,75 +174,6 @@ impl DocumentManager {
             }
         }
         "txt".to_string()
-    }
-
-    /// Create document record in database
-    async fn create_document_record(
-        &self,
-        document_id: &str,
-        workspace_id: &str,
-        filename: &str,
-        file_path: &str,
-        file_type: &str,
-        file_size: i64,
-    ) -> Result<()> {
-        sqlx::query(
-            r#"
-            INSERT INTO documents (id, workspace_id, filename, file_path, file_type, file_size, status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, 'processing', ?)
-            "#,
-        )
-        .bind(document_id)
-        .bind(workspace_id)
-        .bind(filename)
-        .bind(file_path)
-        .bind(file_type)
-        .bind(file_size)
-        .bind(Utc::now().to_rfc3339())
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-
-    /// Update document status
-    async fn update_document_status(
-        &self,
-        document_id: &str,
-        status: &str,
-        error_message: Option<&str>,
-        chunk_count: Option<i32>,
-    ) -> Result<()> {
-        if let Some(count) = chunk_count {
-            sqlx::query(
-                r#"
-                UPDATE documents
-                SET status = ?, error_message = ?, chunk_count = ?
-                WHERE id = ?
-                "#,
-            )
-            .bind(status)
-            .bind(error_message)
-            .bind(count)
-            .bind(document_id)
-            .execute(&self.pool)
-            .await?;
-        } else {
-            sqlx::query(
-                r#"
-                UPDATE documents
-                SET status = ?, error_message = ?
-                WHERE id = ?
-                "#,
-            )
-            .bind(status)
-            .bind(error_message)
-            .bind(document_id)
-            .execute(&self.pool)
-            .await?;
-        }
-
-        Ok(())
     }
 
     /// Process document: chunk, embed, store
@@ -382,11 +320,13 @@ mod tests {
         let storage_path = temp_dir.join(format!("test_storage_{}", Uuid::new_v4()));
 
         let db = Database::new(&db_path).await.unwrap();
-        let vector_store = Arc::new(VectorStore::new("http://localhost:6333"));
+        let repository = Repository::new(db.pool().clone());
+        let vector_store = Arc::new(VectorStore::new(db.pool().clone()));
         let inference_engine = Arc::new(InferenceEngine::new());
 
         let manager = DocumentManager::new(
             db.pool().clone(),
+            &repository,
             vector_store,
             inference_engine,
             storage_path.clone(),

@@ -3,7 +3,7 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
+use sqlx::{Row, SqlitePool};
 
 /// Metadata attached to each vector for filtering and retrieval
 #[derive(Debug, Clone, Serialize, Deserialize)]

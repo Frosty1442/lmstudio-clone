@@ -1,9 +1,8 @@
-use crate::chat_sessions::{ChatSessionManager, CreateSessionRequest, AddMessageRequest};
 use crate::document_manager::{DocumentManager, UploadDocumentRequest};
 use crate::models::ModelManager;
 use crate::rag::{RAGEngine, RAGRequest};
+use crate::repository::{Repository, CreateWorkspaceRequest, UpdateWorkspaceRequest, CreateSessionRequest, AddMessageRequest};
 use crate::types::*;
-use crate::workspace::{WorkspaceManager, CreateWorkspaceRequest, UpdateWorkspaceRequest};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -17,13 +16,26 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::error;
 
+/// Simplified application state with grouped services
 #[derive(Clone)]
 pub struct AppState {
-    pub model_manager: Arc<ModelManager>,
-    pub workspace_manager: Arc<WorkspaceManager>,
-    pub chat_session_manager: Arc<ChatSessionManager>,
-    pub document_manager: Arc<DocumentManager>,
-    pub rag_engine: Arc<RAGEngine>,
+    pub services: Arc<Services>,
+}
+
+/// All application services grouped together
+pub struct Services {
+    pub repository: Repository,
+    pub model_manager: ModelManager,
+    pub document_manager: DocumentManager,
+    pub rag_engine: RAGEngine,
+}
+
+impl AppState {
+    pub fn new(services: Services) -> Self {
+        Self {
+            services: Arc::new(services),
+        }
+    }
 }
 
 // Health check
@@ -36,7 +48,7 @@ pub async fn health() -> impl IntoResponse {
 
 // List models (OpenAI compatible)
 pub async fn list_models(State(state): State<AppState>) -> impl IntoResponse {
-    let models = state.model_manager.list_models().await;
+    let models = state.services.model_manager.list_models().await;
 
     Json(serde_json::json!({
         "object": "list",
@@ -57,9 +69,10 @@ pub async fn chat_completions(
     Json(req): Json<ChatCompletionRequest>,
 ) -> Response {
     // Check if model is loaded
-    if !state.model_manager.is_loaded(&req.model).await {
+    if !state.services.model_manager.is_loaded(&req.model).await {
         // Try to auto-load
         if let Err(e) = state
+            .services
             .model_manager
             .load_model(&req.model, ModelConfig::default())
             .await
@@ -82,7 +95,7 @@ pub async fn chat_completions(
     if req.stream {
         // Streaming response
         let stream = match state
-            .model_manager
+            .services.model_manager
             .inference_engine()
             .generate_stream(&req.model, &prompt, temperature, max_tokens)
             .await
@@ -119,7 +132,7 @@ pub async fn chat_completions(
     } else {
         // Non-streaming response
         let content = match state
-            .model_manager
+            .services.model_manager
             .inference_engine()
             .generate(&req.model, &prompt, temperature, max_tokens)
             .await
@@ -158,9 +171,9 @@ pub async fn completions(
     State(state): State<AppState>,
     Json(req): Json<CompletionRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !state.model_manager.is_loaded(&req.model).await {
+    if !state.services.model_manager.is_loaded(&req.model).await {
         state
-            .model_manager
+            .services.model_manager
             .load_model(&req.model, ModelConfig::default())
             .await
             .map_err(|e| AppError::ModelNotFound(e.to_string()))?;
@@ -170,7 +183,7 @@ pub async fn completions(
     let max_tokens = req.max_tokens.unwrap_or(2048);
 
     let content = state
-        .model_manager
+        .services.model_manager
         .inference_engine()
         .generate(&req.model, &req.prompt, temperature, max_tokens)
         .await
@@ -194,9 +207,9 @@ pub async fn embeddings(
     State(state): State<AppState>,
     Json(req): Json<EmbeddingRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !state.model_manager.is_loaded(&req.model).await {
+    if !state.services.model_manager.is_loaded(&req.model).await {
         state
-            .model_manager
+            .services.model_manager
             .load_model(&req.model, ModelConfig::default())
             .await
             .map_err(|e| AppError::ModelNotFound(e.to_string()))?;
@@ -208,7 +221,7 @@ pub async fn embeddings(
     };
 
     let embeddings = state
-        .model_manager
+        .services.model_manager
         .inference_engine()
         .generate_embeddings(&req.model, texts.clone())
         .await
@@ -247,7 +260,7 @@ pub async fn load_model(
     let config = req.config.unwrap_or_default();
 
     state
-        .model_manager
+        .services.model_manager
         .load_model(&req.model_id, config)
         .await
         .map_err(|e| AppError::ModelLoadError(e.to_string()))?;
@@ -268,7 +281,7 @@ pub async fn unload_model(
         None => return AppError::InvalidRequest("Missing model_id".to_string()).into_response(),
     };
 
-    if let Err(e) = state.model_manager.unload_model(model_id).await {
+    if let Err(e) = state.services.model_manager.unload_model(model_id).await {
         return AppError::ModelUnloadError(e.to_string()).into_response();
     }
 
@@ -284,7 +297,7 @@ pub async fn download_model(
     State(state): State<AppState>,
     Json(req): Json<DownloadModelRequest>,
 ) -> Response {
-    if let Err(e) = state.model_manager.download_model(req).await {
+    if let Err(e) = state.services.model_manager.download_model(req).await {
         return AppError::DownloadError(e.to_string()).into_response();
     }
 
@@ -296,7 +309,7 @@ pub async fn download_model(
 
 // List all models (with details)
 pub async fn list_all_models(State(state): State<AppState>) -> impl IntoResponse {
-    let models = state.model_manager.list_models().await;
+    let models = state.services.model_manager.list_models().await;
     Json(serde_json::json!({ "models": models }))
 }
 
@@ -319,7 +332,7 @@ pub async fn model_stats(
 
 // Server status
 pub async fn server_status(State(state): State<AppState>) -> impl IntoResponse {
-    let loaded_models = state.model_manager.get_loaded_models().await;
+    let loaded_models = state.services.model_manager.get_loaded_models().await;
 
     Json(ServerStatus {
         running: true,
@@ -382,8 +395,8 @@ pub async fn create_workspace(
     Json(req): Json<CreateWorkspaceRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let workspace = state
-        .workspace_manager
-        .create(req)
+        .services.repository
+        .create_workspace(req)
         .await
         .map_err(|e| AppError::InvalidRequest(e.to_string()))?;
 
@@ -398,8 +411,8 @@ pub async fn list_workspaces(
     State(state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let workspaces = state
-        .workspace_manager
-        .list()
+        .services.repository
+        .list_workspaces()
         .await
         .map_err(|e| AppError::InferenceError(e.to_string()))?;
 
@@ -414,8 +427,8 @@ pub async fn get_workspace(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let workspace = state
-        .workspace_manager
-        .get(&id)
+        .services.repository
+        .get_workspace(&id)
         .await
         .map_err(|e| AppError::InferenceError(e.to_string()))?
         .ok_or_else(|| AppError::ModelNotFound(format!("Workspace not found: {}", id)))?;
@@ -432,8 +445,8 @@ pub async fn update_workspace(
     Json(req): Json<UpdateWorkspaceRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let workspace = state
-        .workspace_manager
-        .update(&id, req)
+        .services.repository
+        .update_workspace(&id, req)
         .await
         .map_err(|e| AppError::InvalidRequest(e.to_string()))?;
 
@@ -449,8 +462,8 @@ pub async fn delete_workspace(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     state
-        .workspace_manager
-        .delete(&id)
+        .services.repository
+        .delete_workspace(&id)
         .await
         .map_err(|e| AppError::InvalidRequest(e.to_string()))?;
 
@@ -466,8 +479,8 @@ pub async fn workspace_stats(
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let stats = state
-        .workspace_manager
-        .get_stats(&id)
+        .services.repository
+        .get_workspace_stats(&id)
         .await
         .map_err(|e| AppError::InferenceError(e.to_string()))?;
 
@@ -489,8 +502,8 @@ pub async fn upload_document(
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Get workspace to find embedding model
     let workspace = state
-        .workspace_manager
-        .get(&workspace_id)
+        .services.repository
+        .get_workspace(&workspace_id)
         .await
         .map_err(|e| AppError::InvalidRequest(e.to_string()))?
         .ok_or_else(|| AppError::InvalidRequest(format!("Workspace {} not found", workspace_id)))?;
@@ -504,7 +517,7 @@ pub async fn upload_document(
 
     // Upload and process document
     let response = state
-        .document_manager
+        .services.document_manager
         .upload_document(&workspace_id, embedding_model, req)
         .await
         .map_err(|e| AppError::InferenceError(e.to_string()))?;
@@ -521,7 +534,7 @@ pub async fn list_documents(
     Path(workspace_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let documents = state
-        .document_manager
+        .services.document_manager
         .list_documents(&workspace_id)
         .await
         .map_err(|e| AppError::InferenceError(e.to_string()))?;
@@ -538,7 +551,7 @@ pub async fn get_document(
     Path((_workspace_id, document_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let document = state
-        .document_manager
+        .services.document_manager
         .get_document(&document_id)
         .await
         .map_err(|e| AppError::InferenceError(e.to_string()))?
@@ -555,7 +568,7 @@ pub async fn delete_document(
     Path((workspace_id, document_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     state
-        .document_manager
+        .services.document_manager
         .delete_document(&workspace_id, &document_id)
         .await
         .map_err(|e| AppError::InferenceError(e.to_string()))?;
@@ -577,7 +590,7 @@ pub async fn rag_chat(
     Json(req): Json<RAGRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let response = state
-        .rag_engine
+        .services.rag_engine
         .generate_with_citations(&workspace_id, req)
         .await
         .map_err(|e| AppError::InferenceError(e.to_string()))?;
@@ -599,7 +612,7 @@ pub async fn create_chat_session(
     Json(req): Json<CreateSessionRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let session = state
-        .chat_session_manager
+        .services.repository
         .create_session(&workspace_id, req)
         .await
         .map_err(|e| AppError::InvalidRequest(e.to_string()))?;
@@ -616,7 +629,7 @@ pub async fn list_chat_sessions(
     Path(workspace_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let sessions = state
-        .chat_session_manager
+        .services.repository
         .list_sessions(&workspace_id)
         .await
         .map_err(|e| AppError::InferenceError(e.to_string()))?;
@@ -633,7 +646,7 @@ pub async fn get_chat_session(
     Path((_workspace_id, session_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let session = state
-        .chat_session_manager
+        .services.repository
         .get_session(&session_id)
         .await
         .map_err(|e| AppError::InferenceError(e.to_string()))?
@@ -650,7 +663,7 @@ pub async fn get_chat_session_with_messages(
     Path((_workspace_id, session_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let result = state
-        .chat_session_manager
+        .services.repository
         .get_session_with_messages(&session_id)
         .await
         .map_err(|e| AppError::InferenceError(e.to_string()))?
@@ -670,7 +683,7 @@ pub async fn delete_chat_session(
     Path((_workspace_id, session_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     state
-        .chat_session_manager
+        .services.repository
         .delete_session(&session_id)
         .await
         .map_err(|e| AppError::InferenceError(e.to_string()))?;
@@ -688,7 +701,7 @@ pub async fn add_chat_message(
     Json(req): Json<AddMessageRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let message = state
-        .chat_session_manager
+        .services.repository
         .add_message(&session_id, req)
         .await
         .map_err(|e| AppError::InferenceError(e.to_string()))?;
@@ -715,6 +728,7 @@ mod tests {
 
     async fn create_test_state() -> (AppState, TempDir) {
         use crate::db::Database;
+        use crate::repository::Repository;
         use crate::vector_store::VectorStore;
 
         let temp_dir = TempDir::new().unwrap();
@@ -728,44 +742,41 @@ mod tests {
         // Create a dummy model file
         std::fs::write(models_path.join("test.gguf"), b"test data").unwrap();
 
-        // Create database and workspace manager
+        // Create database and repository
         let database = Arc::new(Database::new(&db_path).await.unwrap());
-        let workspace_manager = Arc::new(WorkspaceManager::new(database.pool().clone()));
-
-        // Create chat session manager
-        let chat_session_manager = Arc::new(ChatSessionManager::new(database.pool().clone()));
+        let repository = Repository::new(database.pool().clone());
 
         // Create inference engine
         let inference_engine = Arc::new(InferenceEngine::new());
 
         // Create model manager
-        let model_manager = Arc::new(ModelManager::new(models_path, inference_engine.clone()).await.unwrap());
+        let model_manager = ModelManager::new(models_path, inference_engine.clone()).await.unwrap();
 
-        // Create vector store
-        let vector_store = Arc::new(VectorStore::new("http://localhost:6333"));
+        // Create vector store (SQLite-based)
+        let vector_store = Arc::new(VectorStore::new(database.pool().clone()));
 
         // Create document manager
-        let document_manager = Arc::new(DocumentManager::new(
+        let document_manager = DocumentManager::new(
             database.pool().clone(),
+            &repository,
             vector_store.clone(),
             inference_engine.clone(),
             docs_path,
-        ));
+        );
 
         // Create RAG engine
-        let rag_engine = Arc::new(RAGEngine::new(
+        let rag_engine = RAGEngine::new(
             vector_store,
-            workspace_manager.clone(),
+            &repository,
             inference_engine,
-        ));
+        );
 
-        let state = AppState {
+        let state = AppState::new(Services {
+            repository,
             model_manager,
-            workspace_manager,
-            chat_session_manager,
             document_manager,
             rag_engine,
-        };
+        });
 
         (state, temp_dir)
     }

@@ -1,6 +1,6 @@
 use crate::inference::InferenceEngine;
+use crate::repository::Repository;
 use crate::vector_store::{SearchFilters, SearchResult, VectorStore};
-use crate::workspace::WorkspaceManager;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -57,19 +57,19 @@ pub struct RAGRequest {
 /// RAG Engine - Handles retrieval augmented generation
 pub struct RAGEngine {
     vector_store: Arc<VectorStore>,
-    workspace_manager: Arc<WorkspaceManager>,
+    repository: Repository,
     inference_engine: Arc<InferenceEngine>,
 }
 
 impl RAGEngine {
     pub fn new(
         vector_store: Arc<VectorStore>,
-        workspace_manager: Arc<WorkspaceManager>,
+        repository: &Repository,
         inference_engine: Arc<InferenceEngine>,
     ) -> Self {
         Self {
             vector_store,
-            workspace_manager,
+            repository: repository.clone(),
             inference_engine,
         }
     }
@@ -175,8 +175,8 @@ impl RAGEngine {
     ) -> Result<RAGResponse> {
         // 1. Get workspace configuration
         let workspace = self
-            .workspace_manager
-            .get(workspace_id)
+            .repository
+            .get_workspace(workspace_id)
             .await?
             .ok_or_else(|| anyhow!("Workspace not found: {}", workspace_id))?;
 
@@ -234,7 +234,7 @@ impl RAGEngine {
 mod tests {
     use super::*;
     use crate::db::Database;
-    use crate::workspace::{CreateWorkspaceRequest, WorkspaceManager};
+    use crate::repository::{CreateWorkspaceRequest, Repository};
     use std::path::PathBuf;
 
     async fn create_test_rag_engine() -> (RAGEngine, String) {
@@ -243,12 +243,12 @@ mod tests {
         let db_path = temp_dir.join(format!("test_rag_{}.db", uuid::Uuid::new_v4()));
         let db = Database::new(&db_path).await.unwrap();
 
-        // Create workspace manager
-        let workspace_manager = Arc::new(WorkspaceManager::new(db.pool().clone()));
+        // Create repository
+        let repository = Repository::new(db.pool().clone());
 
         // Create test workspace
-        let workspace = workspace_manager
-            .create(CreateWorkspaceRequest {
+        let workspace = repository
+            .create_workspace(CreateWorkspaceRequest {
                 name: "Test Workspace".to_string(),
                 description: Some("Test workspace for RAG".to_string()),
                 system_prompt: Some("You are a test assistant.".to_string()),
@@ -261,10 +261,10 @@ mod tests {
             .unwrap();
 
         // Create vector store and inference engine
-        let vector_store = Arc::new(VectorStore::new("http://localhost:6333"));
+        let vector_store = Arc::new(VectorStore::new(db.pool().clone()));
         let inference_engine = Arc::new(InferenceEngine::new());
 
-        let rag_engine = RAGEngine::new(vector_store, workspace_manager, inference_engine);
+        let rag_engine = RAGEngine::new(vector_store, &repository, inference_engine);
 
         // Cleanup
         std::fs::remove_file(&db_path).ok();
