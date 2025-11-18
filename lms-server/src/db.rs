@@ -51,14 +51,19 @@ impl Database {
     async fn run_migrations(&self) -> Result<()> {
         info!("Running database migrations...");
 
-        // Read and execute the migration file
-        let migration_sql = include_str!("../migrations/20241105000001_init_schema.sql");
-
-        // Execute each statement
-        sqlx::raw_sql(migration_sql)
+        // Migration 1: Initial schema
+        let migration1 = include_str!("../migrations/20241105000001_init_schema.sql");
+        sqlx::raw_sql(migration1)
             .execute(&self.pool)
             .await
-            .context("Failed to run migrations")?;
+            .context("Failed to run initial schema migration")?;
+
+        // Migration 2: Vector embeddings
+        let migration2 = include_str!("../migrations/20241106000001_add_vector_embeddings.sql");
+        sqlx::raw_sql(migration2)
+            .execute(&self.pool)
+            .await
+            .context("Failed to run vector embeddings migration")?;
 
         info!("Database migrations completed successfully");
         Ok(())

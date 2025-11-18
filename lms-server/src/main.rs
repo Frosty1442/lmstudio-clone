@@ -17,6 +17,7 @@ mod documents;
 mod inference;
 mod models;
 mod rag;
+mod repository;
 mod types;
 mod vector_store;
 mod workspace;
