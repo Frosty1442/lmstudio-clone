@@ -67,13 +67,22 @@
 - ✅ **All endpoints integrated into main router**
 - ✅ **All endpoints tested**
 
-### 4. Document Processing (Complete)
+### 4. Document Processing (Complete - Now with PDF/DOCX!)
+- ✅ **PDF parsing with lopdf (pure Rust)**
+- ✅ **DOCX parsing with docx-rs**
+- ✅ **Page count extraction and storage**
+- ✅ **Metadata extraction (title, author, date)**
 - ✅ Text chunking with semantic boundaries
 - ✅ Configurable chunk size and overlap
 - ✅ Unicode-aware sentence segmentation
 - ✅ Position tracking (char offsets)
-- ✅ Document type detection
+- ✅ Document type detection (TXT, MD, PDF, DOCX)
 - ✅ **Tests: 9/9 passing**
+
+Document parsing features:
+- **PDF**: Full text extraction, page counts, metadata
+- **DOCX**: Paragraph extraction, clean text output
+- **Markdown/Text**: Direct processing as before
 
 Chunking features:
 - Default chunk size: 1000 characters
@@ -118,8 +127,12 @@ Chunking features:
 - ✅ Support for search filters
 - ✅ **Tests: 3/3 passing**
 
-### 9. Document Manager (Complete)
+### 9. Document Manager (Complete - Full Format Support!)
+- ✅ **PDF/DOCX/TXT/MD document parsing**
+- ✅ **Page count tracking for PDFs**
+- ✅ **Metadata extraction and storage**
 - ✅ Document upload with automatic processing
+- ✅ Parse → Chunk → Embed → Store pipeline
 - ✅ Text chunking using semantic boundaries
 - ✅ Embedding generation for all chunks
 - ✅ Vector storage with metadata
