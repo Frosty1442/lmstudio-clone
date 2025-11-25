@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -181,19 +181,20 @@ impl TextChunker {
 pub enum DocumentType {
     Text,
     Markdown,
-    // TODO: Add when parsers available
-    // Pdf,
-    // Docx,
-    // Html,
+    Pdf,
+    Docx,
 }
 
 impl DocumentType {
     pub fn from_filename(filename: &str) -> Self {
         let lower = filename.to_lowercase();
-        if lower.ends_with(".md") || lower.ends_with(".markdown") {
+        if lower.ends_with(".pdf") {
+            DocumentType::Pdf
+        } else if lower.ends_with(".docx") {
+            DocumentType::Docx
+        } else if lower.ends_with(".md") || lower.ends_with(".markdown") {
             DocumentType::Markdown
         } else {
-            // Default to text for now
             DocumentType::Text
         }
     }
@@ -202,7 +203,152 @@ impl DocumentType {
         match self {
             DocumentType::Text => "txt",
             DocumentType::Markdown => "md",
+            DocumentType::Pdf => "pdf",
+            DocumentType::Docx => "docx",
         }
+    }
+}
+
+/// Parsed document with metadata
+#[derive(Debug, Clone)]
+pub struct ParsedDocument {
+    pub text: String,
+    pub page_count: Option<usize>,
+    pub metadata: DocumentMetadata,
+}
+
+/// Document metadata extracted during parsing
+#[derive(Debug, Clone, Default)]
+pub struct DocumentMetadata {
+    pub title: Option<String>,
+    pub author: Option<String>,
+    pub created_date: Option<String>,
+}
+
+/// Document parser that handles multiple formats
+pub struct DocumentParser;
+
+impl DocumentParser {
+    /// Parse a document based on its type
+    pub fn parse(content: &[u8], doc_type: DocumentType) -> Result<ParsedDocument> {
+        match doc_type {
+            DocumentType::Text | DocumentType::Markdown => Self::parse_text(content),
+            DocumentType::Pdf => Self::parse_pdf(content),
+            DocumentType::Docx => Self::parse_docx(content),
+        }
+    }
+
+    /// Parse plain text or markdown
+    fn parse_text(content: &[u8]) -> Result<ParsedDocument> {
+        let text = String::from_utf8_lossy(content).to_string();
+        Ok(ParsedDocument {
+            text,
+            page_count: None,
+            metadata: DocumentMetadata::default(),
+        })
+    }
+
+    /// Parse PDF using lopdf
+    fn parse_pdf(content: &[u8]) -> Result<ParsedDocument> {
+        use lopdf::Document;
+
+        let doc = Document::load_mem(content)
+            .map_err(|e| anyhow!("Failed to load PDF: {}", e))?;
+
+        let page_count = doc.get_pages().len();
+        let mut text = String::new();
+
+        // Extract text from all pages
+        for page_num in 1..=page_count {
+            match doc.extract_text(&[page_num as u32]) {
+                Ok(page_text) => {
+                    if !text.is_empty() {
+                        text.push_str("\n\n");
+                    }
+                    text.push_str(&page_text);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to extract text from page {}: {}", page_num, e);
+                    continue;
+                }
+            }
+        }
+
+        // Extract metadata
+        let metadata = Self::extract_pdf_metadata(&doc);
+
+        Ok(ParsedDocument {
+            text,
+            page_count: Some(page_count),
+            metadata,
+        })
+    }
+
+    /// Extract metadata from PDF
+    fn extract_pdf_metadata(doc: &lopdf::Document) -> DocumentMetadata {
+        let mut metadata = DocumentMetadata::default();
+
+        // Try to get info dictionary
+        if let Ok(info_dict) = doc.trailer.get(b"Info") {
+            if let Ok(info) = info_dict.as_dict() {
+                // Extract title
+                if let Ok(title) = info.get(b"Title") {
+                    if let Ok(title_bytes) = title.as_str() {
+                        metadata.title = Some(String::from_utf8_lossy(title_bytes).to_string());
+                    }
+                }
+
+                // Extract author
+                if let Ok(author) = info.get(b"Author") {
+                    if let Ok(author_bytes) = author.as_str() {
+                        metadata.author = Some(String::from_utf8_lossy(author_bytes).to_string());
+                    }
+                }
+
+                // Extract creation date
+                if let Ok(created) = info.get(b"CreationDate") {
+                    if let Ok(created_bytes) = created.as_str() {
+                        metadata.created_date = Some(String::from_utf8_lossy(created_bytes).to_string());
+                    }
+                }
+            }
+        }
+
+        metadata
+    }
+
+    /// Parse DOCX using docx-rs
+    fn parse_docx(content: &[u8]) -> Result<ParsedDocument> {
+        let docx = docx_rs::read_docx(content)
+            .map_err(|e| anyhow!("Failed to read DOCX: {}", e))?;
+
+        let mut text = String::new();
+
+        // Extract text from all paragraphs
+        for child in &docx.document.children {
+            if let docx_rs::DocumentChild::Paragraph(para) = child {
+                for para_child in &para.children {
+                    if let docx_rs::ParagraphChild::Run(run) = para_child {
+                        for run_child in &run.children {
+                            if let docx_rs::RunChild::Text(text_elem) = run_child {
+                                text.push_str(&text_elem.text);
+                            }
+                        }
+                    }
+                }
+                text.push('\n');
+            }
+        }
+
+        // Extract metadata from core properties (if available)
+        // Note: docx-rs API may vary, metadata extraction is optional
+        let metadata = DocumentMetadata::default();
+
+        Ok(ParsedDocument {
+            text,
+            page_count: None, // DOCX doesn't have fixed pages
+            metadata,
+        })
     }
 }
 

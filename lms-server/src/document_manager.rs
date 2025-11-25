@@ -1,4 +1,4 @@
-use crate::documents::{TextChunker, ChunkConfig};
+use crate::documents::{TextChunker, ChunkConfig, DocumentParser, DocumentType};
 use crate::inference::InferenceEngine;
 use crate::repository::Repository;
 use crate::vector_store::{ChunkMetadata, VectorStore};
@@ -46,7 +46,7 @@ pub struct DocumentChunk {
 #[derive(Debug, Clone, Deserialize)]
 pub struct UploadDocumentRequest {
     pub filename: String,
-    pub content: String, // Plain text content for now
+    pub content: String, // Base64 encoded for binary files, plain text for .txt
     pub file_type: Option<String>,
 }
 
@@ -122,7 +122,7 @@ impl DocumentManager {
             )
             .await?;
 
-        // Process document in background (chunk + embed + store)
+        // Process document in background (parse + chunk + embed + store)
         match self
             .process_document(
                 &document_id,
@@ -134,11 +134,20 @@ impl DocumentManager {
             )
             .await
         {
-            Ok(chunk_count) => {
+            Ok((chunk_count, page_count)) => {
                 // Update status to ready
                 self.repository
                     .update_document_status(&document_id, "ready", None, Some(chunk_count as i32))
                     .await?;
+
+                // Update page count if available
+                if let Some(pages) = page_count {
+                    sqlx::query("UPDATE documents SET page_count = ? WHERE id = ?")
+                        .bind(pages as i32)
+                        .bind(&document_id)
+                        .execute(&self.pool)
+                        .await?;
+                }
 
                 Ok(UploadDocumentResponse {
                     document_id,
@@ -176,7 +185,7 @@ impl DocumentManager {
         "txt".to_string()
     }
 
-    /// Process document: chunk, embed, store
+    /// Process document: parse, chunk, embed, store
     async fn process_document(
         &self,
         document_id: &str,
@@ -185,17 +194,30 @@ impl DocumentManager {
         content: &str,
         filename: &str,
         file_type: &str,
-    ) -> Result<usize> {
-        // 1. Chunk the text
+    ) -> Result<(usize, Option<usize>)> {  // Returns (chunk_count, page_count)
+        // 1. Parse the document based on type
+        info!("Parsing document {} (type: {})", document_id, file_type);
+        let doc_type = DocumentType::from_filename(filename);
+        let content_bytes = content.as_bytes();
+
+        let parsed = DocumentParser::parse(content_bytes, doc_type)?;
+        let page_count = parsed.page_count;
+        info!(
+            "Parsed document: {} pages, {} bytes of text",
+            page_count.unwrap_or(0),
+            parsed.text.len()
+        );
+
+        // 2. Chunk the extracted text
         info!("Chunking document {}", document_id);
-        let chunks = self.text_chunker.chunk_text(content)?;
+        let chunks = self.text_chunker.chunk_text(&parsed.text)?;
         info!("Created {} chunks", chunks.len());
 
         if chunks.is_empty() {
-            return Ok(0);
+            return Ok((0, page_count));
         }
 
-        // 2. Generate embeddings for all chunks
+        // 3. Generate embeddings for all chunks
         info!("Generating embeddings for {} chunks", chunks.len());
         let chunk_texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
         let embeddings = self
@@ -211,7 +233,7 @@ impl DocumentManager {
             ));
         }
 
-        // 3. Prepare chunks for vector store
+        // 4. Prepare chunks for vector store
         let created_at = Utc::now().to_rfc3339();
         let vector_chunks: Vec<(String, Vec<f32>, String, ChunkMetadata)> = chunks
             .iter()
@@ -223,7 +245,7 @@ impl DocumentManager {
                     document_id: document_id.to_string(),
                     document_name: filename.to_string(),
                     chunk_index: chunk.index,
-                    page_number: None, // TODO: Extract from PDFs
+                    page_number: None,  // TODO: Calculate page number from chunk position
                     file_type: file_type.to_string(),
                     created_at: created_at.clone(),
                 };
@@ -237,14 +259,14 @@ impl DocumentManager {
             })
             .collect();
 
-        // 4. Insert into vector store
+        // 5. Insert into vector store
         info!("Inserting {} chunks into vector store", vector_chunks.len());
         let vector_ids = self
             .vector_store
             .insert_chunks(workspace_id, vector_chunks)
             .await?;
 
-        // 5. Store chunk records in database
+        // 6. Store chunk records in database
         info!("Storing chunk records in database");
         for (i, (chunk, vector_id)) in chunks.iter().zip(vector_ids.iter()).enumerate() {
             let chunk_id = Uuid::new_v4().to_string();
@@ -267,7 +289,7 @@ impl DocumentManager {
             .await?;
         }
 
-        Ok(chunks.len())
+        Ok((chunks.len(), page_count))
     }
 
     /// Get document by ID

@@ -56,15 +56,12 @@ chrono = "0.4"
 # Vector operations (SQLite-based, no external server needed)
 bincode = "1.3"  # Efficient binary serialization for embeddings
 
-# Document parsing (TODO: Add back when system dependencies available)
-# pdf-extract = "0.7"      # Requires GTK/GDK system libraries
-# lopdf = "0.32"           # Alternative PDF parser
-# docx-rs = "0.4"          # Requires additional dependencies
-# html2text = "0.12"       # Requires libsoup
-# scraper = "0.19"         # Requires libsoup
+# Document parsing (pure Rust implementations)
+lopdf = "0.32"               # Pure Rust PDF parser
+docx-rs = "0.4"              # DOCX parser
+encoding_rs = "0.8"          # Text encoding detection
 
 # Text processing
-# tiktoken-rs = "0.5"      # TODO: Add back when needed for token counting
 unicode-segmentation = "1.11"
 
 # Multipart form data

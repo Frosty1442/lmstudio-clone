@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 // OpenAI API Types
 #[derive(Debug, Serialize, Deserialize)]

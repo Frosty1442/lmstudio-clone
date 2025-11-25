@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use futures_util::stream::{self, Stream, StreamExt};
+use futures_util::stream::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
