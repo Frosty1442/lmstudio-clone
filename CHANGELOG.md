@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### [2024-11-25] - PDF and DOCX Parsing Implementation
+
+#### ✨ Added
+- **PDF Parsing Support**
+  - Full text extraction using `lopdf` (pure Rust implementation)
+  - Page count detection and storage in database
+  - Metadata extraction (title, author, creation date)
+  - Per-page text extraction with robust error handling
+  - Proper UTF-8 conversion for all metadata fields
+
+- **DOCX Parsing Support**
+  - Complete text extraction using `docx-rs`
+  - Paragraph-by-paragraph processing
+  - Handles runs and text elements properly
+  - Clean output with newline preservation
+
+- **Document Processing Pipeline**
+  - Created `DocumentParser` with pluggable format support
+  - New `ParsedDocument` type containing text, page_count, and metadata
+  - New `DocumentMetadata` type for extracted metadata
+  - Automatic document type detection from filename extensions
+
+#### 🔄 Changed
+- **DocumentManager Updates**
+  - `process_document` now parses before chunking
+  - Returns `(chunk_count, page_count)` tuple instead of just count
+  - Stores page_count in database after successful processing
+  - Parse → Chunk → Embed → Store pipeline
+
+- **DocumentType Enum Expansion**
+  - Added `Pdf` variant
+  - Added `Docx` variant
+  - Updated `from_filename()` to detect PDF/DOCX
+  - Updated `as_str()` to return correct extensions
+
+#### 📦 Dependencies
+- **Added**: `lopdf = "0.32"` (pure Rust PDF parser, no system deps)
+- **Added**: `docx-rs = "0.4"` (DOCX parsing)
+- **Added**: `encoding_rs = "0.8"` (text encoding detection)
+
+#### ✅ Testing
+- All 47 tests passing
+- No regression in existing functionality
+- Proper error handling throughout parsing pipeline
+
+#### 🎯 Impact
+Now supports real-world document formats! The system can process:
+- PDF files with page count tracking
+- DOCX files with proper text extraction
+- Markdown and plain text (as before)
+
+This completes the most critical missing feature.
+
+---
+
 ### [2024-11-09] - Major Architecture Refactoring
 
 #### 🎨 Refactored
