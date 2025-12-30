@@ -240,14 +240,18 @@ impl DocumentManager {
             .zip(embeddings.iter())
             .map(|(chunk, embedding)| {
                 let chunk_id = Uuid::new_v4().to_string();
+                // Calculate page number from chunk position using page boundaries
+                let page_number = parsed.get_page_for_position(chunk.start_pos);
                 let metadata = ChunkMetadata {
                     workspace_id: workspace_id.to_string(),
                     document_id: document_id.to_string(),
                     document_name: filename.to_string(),
                     chunk_index: chunk.index,
-                    page_number: None,  // TODO: Calculate page number from chunk position
+                    page_number,
                     file_type: file_type.to_string(),
                     created_at: created_at.clone(),
+                    char_start: chunk.start_pos,
+                    char_end: chunk.end_pos,
                 };
 
                 (

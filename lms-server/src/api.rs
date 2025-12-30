@@ -12,7 +12,7 @@ use axum::{
 use futures_util::StreamExt;
 use std::convert::Infallible;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tracing::error;
 
 /// Simplified application state with grouped services
@@ -27,6 +27,7 @@ pub struct Services {
     pub model_manager: ModelManager,
     pub document_manager: DocumentManager,
     pub rag_engine: RAGEngine,
+    pub start_time: Instant,
 }
 
 impl AppState {
@@ -332,11 +333,12 @@ pub async fn model_stats(
 // Server status
 pub async fn server_status(State(state): State<AppState>) -> impl IntoResponse {
     let loaded_models = state.services.model_manager.get_loaded_models().await;
+    let uptime = state.services.start_time.elapsed().as_secs();
 
     Json(ServerStatus {
         running: true,
         loaded_models,
-        uptime: 0, // TODO: Track actual uptime
+        uptime,
         version: env!("CARGO_PKG_VERSION").to_string(),
     })
 }
@@ -775,6 +777,7 @@ mod tests {
             model_manager,
             document_manager,
             rag_engine,
+            start_time: std::time::Instant::now(),
         });
 
         (state, temp_dir)

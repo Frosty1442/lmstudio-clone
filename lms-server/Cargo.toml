@@ -5,6 +5,14 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[lib]
+name = "lms_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lms-server"
+path = "src/main.rs"
+
 [dependencies]
 # Web framework
 axum = { version = "0.7", features = ["ws", "macros"] }

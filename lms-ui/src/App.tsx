@@ -4,6 +4,8 @@ import Chat from "./components/Chat";
 import Models from "./components/Models";
 import Settings from "./components/Settings";
 import Sidebar from "./components/Sidebar";
+import LoadingSpinner from "./components/LoadingSpinner";
+import { ToastContainer, useToast } from "./components/Toast";
 
 interface Model {
   id: string;
@@ -25,6 +27,8 @@ function App() {
   const [models, setModels] = useState<Model[]>([]);
   const [serverStatus, setServerStatus] = useState<ServerStatus | null>(null);
   const [loading, setLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState(false);
+  const toast = useToast();
 
   useEffect(() => {
     loadData();
@@ -43,35 +47,45 @@ function App() {
       setServerStatus(statusData);
     } catch (error) {
       console.error("Error loading data:", error);
+      toast.error("Connection Error", "Failed to connect to server");
     } finally {
       setLoading(false);
     }
   };
 
   const handleLoadModel = async (modelId: string) => {
+    setActionLoading(true);
     try {
       await invoke("load_model", { modelId });
       await loadData();
+      toast.success("Model Loaded", `${modelId} is now ready to use`);
     } catch (error) {
       console.error("Error loading model:", error);
-      alert(`Error: ${error}`);
+      toast.error("Failed to Load Model", String(error));
+    } finally {
+      setActionLoading(false);
     }
   };
 
   const handleUnloadModel = async (modelId: string) => {
+    setActionLoading(true);
     try {
       await invoke("unload_model", { modelId });
       await loadData();
+      toast.success("Model Unloaded", `${modelId} has been unloaded`);
     } catch (error) {
       console.error("Error unloading model:", error);
-      alert(`Error: ${error}`);
+      toast.error("Failed to Unload Model", String(error));
+    } finally {
+      setActionLoading(false);
     }
   };
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-xl">Loading...</div>
+      <div className="flex flex-col items-center justify-center h-screen gap-4">
+        <LoadingSpinner size="lg" />
+        <div className="text-xl text-gray-400">Connecting to server...</div>
       </div>
     );
   }
@@ -84,7 +98,15 @@ function App() {
         serverStatus={serverStatus}
         loadedModelsCount={models.filter((m) => m.loaded).length}
       />
-      <main className="flex-1 overflow-hidden">
+      <main className="flex-1 overflow-hidden relative">
+        {actionLoading && (
+          <div className="absolute inset-0 bg-black/30 flex items-center justify-center z-40">
+            <div className="bg-gray-800 rounded-lg p-4 flex items-center gap-3">
+              <LoadingSpinner size="md" />
+              <span>Processing...</span>
+            </div>
+          </div>
+        )}
         {currentPage === "chat" && <Chat models={models} />}
         {currentPage === "models" && (
           <Models
@@ -96,6 +118,7 @@ function App() {
         )}
         {currentPage === "settings" && <Settings />}
       </main>
+      <ToastContainer toasts={toast.toasts} onDismiss={toast.dismissToast} />
     </div>
   );
 }

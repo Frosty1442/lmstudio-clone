@@ -128,7 +128,7 @@ impl RAGEngine {
                 document_id: result.metadata.document_id.clone(),
                 document_name: result.metadata.document_name.clone(),
                 page_number: result.metadata.page_number,
-                char_range: (0, 0), // TODO: Add char positions to ChunkMetadata if needed
+                char_range: (result.metadata.char_start, result.metadata.char_end),
                 score: result.score,
                 text: result.chunk_text.clone(),
             });
@@ -291,6 +291,8 @@ mod tests {
                     page_number: Some(1),
                     file_type: "txt".to_string(),
                     created_at: "2024-11-05T00:00:00Z".to_string(),
+                    char_start: 0,
+                    char_end: 31,
                 },
             },
             SearchResult {
@@ -305,6 +307,8 @@ mod tests {
                     page_number: Some(1),
                     file_type: "txt".to_string(),
                     created_at: "2024-11-05T00:00:00Z".to_string(),
+                    char_start: 32,
+                    char_end: 68,
                 },
             },
         ];
@@ -366,6 +370,8 @@ mod tests {
                 page_number: Some(42),
                 file_type: "pdf".to_string(),
                 created_at: "2024-11-05T00:00:00Z".to_string(),
+                char_start: 0,
+                char_end: 12,
             },
         }];
 

@@ -15,6 +15,10 @@ pub struct ChunkMetadata {
     pub page_number: Option<u32>,
     pub file_type: String,
     pub created_at: String,
+    /// Character start position in original document
+    pub char_start: usize,
+    /// Character end position in original document
+    pub char_end: usize,
 }
 
 /// Advanced filtering options for vector search
@@ -99,7 +103,7 @@ impl VectorStore {
     ) -> Result<Vec<SearchResult>> {
         // Build query with filters
         let mut query_str = String::from(
-            "SELECT v.id, v.embedding, c.chunk_text, c.document_id, d.filename, d.file_type, c.page_number, c.chunk_index, v.created_at
+            "SELECT v.id, v.embedding, c.chunk_text, c.document_id, d.filename, d.file_type, c.page_number, c.chunk_index, c.char_start, c.char_end, v.created_at
              FROM vector_embeddings v
              JOIN document_chunks c ON v.id = c.vector_id
              JOIN documents d ON c.document_id = d.id
@@ -161,6 +165,8 @@ impl VectorStore {
                     page_number: row.get("page_number"),
                     file_type: row.get("file_type"),
                     created_at: row.get("created_at"),
+                    char_start: row.get::<i32, _>("char_start") as usize,
+                    char_end: row.get::<i32, _>("char_end") as usize,
                 },
             });
         }

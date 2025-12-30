@@ -215,6 +215,27 @@ pub struct ParsedDocument {
     pub text: String,
     pub page_count: Option<usize>,
     pub metadata: DocumentMetadata,
+    /// Character offsets where each page ends (for PDFs)
+    /// page_boundaries[0] is the end of page 1, etc.
+    pub page_boundaries: Vec<usize>,
+}
+
+impl ParsedDocument {
+    /// Get the page number (1-indexed) for a given character position
+    pub fn get_page_for_position(&self, char_pos: usize) -> Option<u32> {
+        if self.page_boundaries.is_empty() {
+            return None;
+        }
+
+        for (page_idx, &boundary) in self.page_boundaries.iter().enumerate() {
+            if char_pos < boundary {
+                return Some((page_idx + 1) as u32);
+            }
+        }
+
+        // If past all boundaries, return last page
+        Some(self.page_boundaries.len() as u32)
+    }
 }
 
 /// Document metadata extracted during parsing
@@ -245,6 +266,7 @@ impl DocumentParser {
             text,
             page_count: None,
             metadata: DocumentMetadata::default(),
+            page_boundaries: Vec::new(),
         })
     }
 
@@ -257,8 +279,9 @@ impl DocumentParser {
 
         let page_count = doc.get_pages().len();
         let mut text = String::new();
+        let mut page_boundaries = Vec::new();
 
-        // Extract text from all pages
+        // Extract text from all pages, tracking boundaries
         for page_num in 1..=page_count {
             match doc.extract_text(&[page_num as u32]) {
                 Ok(page_text) => {
@@ -266,9 +289,13 @@ impl DocumentParser {
                         text.push_str("\n\n");
                     }
                     text.push_str(&page_text);
+                    // Record where this page ends
+                    page_boundaries.push(text.len());
                 }
                 Err(e) => {
                     tracing::warn!("Failed to extract text from page {}: {}", page_num, e);
+                    // Still record boundary for failed pages
+                    page_boundaries.push(text.len());
                     continue;
                 }
             }
@@ -281,6 +308,7 @@ impl DocumentParser {
             text,
             page_count: Some(page_count),
             metadata,
+            page_boundaries,
         })
     }
 
@@ -348,6 +376,7 @@ impl DocumentParser {
             text,
             page_count: None, // DOCX doesn't have fixed pages
             metadata,
+            page_boundaries: Vec::new(), // DOCX doesn't have page boundaries
         })
     }
 }

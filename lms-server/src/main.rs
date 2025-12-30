@@ -1,24 +1,17 @@
 use axum::{
+    middleware,
     routing::{get, post},
     Router,
 };
 use clap::Parser;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Instant;
 use tower_http::cors::CorsLayer;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
-mod api;
-mod db;
-mod document_manager;
-mod documents;
-mod inference;
-mod models;
-mod rag;
-mod repository;
-mod types;
-mod vector_store;
+use lms_server::{api, auth, db, document_manager, inference, models, rag, repository, vector_store};
 
 #[derive(Parser, Debug)]
 #[command(name = "lms-server")]
@@ -120,12 +113,22 @@ async fn main() -> anyhow::Result<()> {
     );
     info!("RAG engine initialized");
 
+    // Initialize API key authentication
+    let auth_enabled = auth::init_api_keys();
+    if auth_enabled {
+        info!("🔐 API key authentication enabled");
+    } else {
+        info!("⚠️  API key authentication disabled (set LMS_API_KEY or LMS_API_KEYS to enable)");
+    }
+
     // Create app state with grouped services
+    let start_time = Instant::now();
     let state = api::AppState::new(api::Services {
         repository,
         model_manager,
         document_manager,
         rag_engine,
+        start_time,
     });
 
     // Build router
@@ -166,6 +169,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/workspaces/:workspace_id/sessions/:session_id/messages", post(api::add_chat_message))
         // Status endpoint
         .route("/v1/status", get(api::server_status))
+        .layer(middleware::from_fn(auth::auth_middleware))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
