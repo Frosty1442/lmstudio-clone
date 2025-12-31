@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  lms-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lms-server
+    restart: unless-stopped
+    ports:
+      - "1234:1234"
+    volumes:
+      - lms-data:/home/lms/.lmstudio-clone
+      - ./models:/home/lms/.lmstudio-clone/models:ro
+    environment:
+      - LMS_API_KEY=${LMS_API_KEY:-}
+      - LMS_RATE_LIMIT=${LMS_RATE_LIMIT:-60}
+      - LMS_RATE_LIMIT_BURST=${LMS_RATE_LIMIT_BURST:-10}
+      - RUST_LOG=${RUST_LOG:-info}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:1234/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  lms-data:
+    driver: local

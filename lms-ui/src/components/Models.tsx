@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { NoModelsEmpty } from "./EmptyState";
 
 interface ModelsProps {
   models: any[];
@@ -59,14 +60,7 @@ export default function Models({
 
       <div className="flex-1 overflow-y-auto p-4">
         {models.length === 0 ? (
-          <div className="flex items-center justify-center h-full text-gray-400">
-            <div className="text-center">
-              <p className="text-xl mb-2">No models found</p>
-              <p className="text-sm">
-                Place GGUF models in ~/.lmstudio-clone/models/
-              </p>
-            </div>
-          </div>
+          <NoModelsEmpty />
         ) : (
           <div className="grid grid-cols-1 gap-4">
             {models.map((model) => (

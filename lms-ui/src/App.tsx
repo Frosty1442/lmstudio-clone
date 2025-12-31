@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 import Chat from "./components/Chat";
 import Models from "./components/Models";
@@ -6,6 +6,7 @@ import Settings from "./components/Settings";
 import Sidebar from "./components/Sidebar";
 import LoadingSpinner from "./components/LoadingSpinner";
 import { ToastContainer, useToast } from "./components/Toast";
+import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 
 interface Model {
   id: string;
@@ -29,6 +30,22 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const toast = useToast();
+
+  // Keyboard shortcuts
+  useKeyboardShortcuts([
+    { key: "1", ctrl: true, action: () => setCurrentPage("chat"), description: "Go to Chat" },
+    { key: "2", ctrl: true, action: () => setCurrentPage("models"), description: "Go to Models" },
+    { key: "3", ctrl: true, action: () => setCurrentPage("settings"), description: "Go to Settings" },
+  ]);
+
+  // Callbacks for child components
+  const handleError = useCallback((title: string, message: string) => {
+    toast.error(title, message);
+  }, [toast]);
+
+  const handleSuccess = useCallback((title: string, message: string) => {
+    toast.success(title, message);
+  }, [toast]);
 
   useEffect(() => {
     loadData();
@@ -107,7 +124,7 @@ function App() {
             </div>
           </div>
         )}
-        {currentPage === "chat" && <Chat models={models} />}
+        {currentPage === "chat" && <Chat models={models} onError={handleError} />}
         {currentPage === "models" && (
           <Models
             models={models}
@@ -116,7 +133,7 @@ function App() {
             onRefresh={loadData}
           />
         )}
-        {currentPage === "settings" && <Settings />}
+        {currentPage === "settings" && <Settings onError={handleError} onSuccess={handleSuccess} />}
       </main>
       <ToastContainer toasts={toast.toasts} onDismiss={toast.dismissToast} />
     </div>

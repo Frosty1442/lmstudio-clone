@@ -1,7 +1,12 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/tauri";
 
-export default function Settings() {
+interface SettingsProps {
+  onError?: (title: string, message: string) => void;
+  onSuccess?: (title: string, message: string) => void;
+}
+
+export default function Settings({ onError, onSuccess }: SettingsProps) {
   const [serverUrl, setServerUrl] = useState("http://localhost:1234");
   const [saved, setSaved] = useState(false);
 
@@ -10,9 +15,10 @@ export default function Settings() {
       await invoke("set_server_url", { url: serverUrl });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
+      onSuccess?.("Settings Saved", "Server URL updated successfully");
     } catch (error) {
       console.error("Error saving settings:", error);
-      alert(`Error: ${error}`);
+      onError?.("Failed to Save", String(error));
     }
   };
 
