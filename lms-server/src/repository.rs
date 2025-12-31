@@ -376,7 +376,7 @@ impl Repository {
         .bind(&req.content)
         .bind(&req.model_id)
         .bind(&citations_json)
-        .bind(&req.tokens_used)
+        .bind(req.tokens_used)
         .bind(&now)
         .execute(&self.pool)
         .await?;
@@ -537,6 +537,7 @@ impl Repository {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)] // Parameters map directly to table columns
     pub async fn create_document_chunk(
         &self,
         chunk_id: &str,

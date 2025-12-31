@@ -99,7 +99,7 @@ impl TextChunker {
                     // Calculate overlap: take last N characters worth of sentences
                     let overlap_text = self.get_overlap_text(&sentence_buffer);
                     current_chunk = overlap_text.clone();
-                    chunk_start_pos = chunk_start_pos + (current_chunk.len() - overlap_text.len());
+                    chunk_start_pos += current_chunk.len() - overlap_text.len();
 
                     // Keep only sentences in overlap for next iteration
                     sentence_buffer = self.get_overlap_sentences(&sentence_buffer);

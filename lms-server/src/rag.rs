@@ -235,7 +235,7 @@ mod tests {
     use super::*;
     use crate::db::Database;
     use crate::repository::{CreateWorkspaceRequest, Repository};
-    use std::path::PathBuf;
+    
 
     async fn create_test_rag_engine() -> (RAGEngine, String) {
         // Create temporary database

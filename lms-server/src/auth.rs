@@ -51,14 +51,14 @@ pub fn init_api_keys() -> bool {
 
 /// Check if API key authentication is enabled
 pub fn is_auth_enabled() -> bool {
-    API_KEYS.get().map_or(false, |keys| !keys.is_empty())
+    API_KEYS.get().is_some_and(|keys| !keys.is_empty())
 }
 
 /// Validate an API key
 fn validate_api_key(key: &str) -> bool {
     API_KEYS
         .get()
-        .map_or(false, |keys| keys.contains(key))
+        .is_some_and(|keys| keys.contains(key))
 }
 
 /// Extract API key from request headers

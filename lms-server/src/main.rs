@@ -11,7 +11,7 @@ use tower_http::cors::CorsLayer;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
-use lms_server::{api, auth, db, document_manager, inference, models, rag, repository, vector_store};
+use lms_server::{api, auth, db, document_manager, inference, metrics, models, rag, rate_limit, repository, vector_store};
 
 #[derive(Parser, Debug)]
 #[command(name = "lms-server")]
@@ -121,6 +121,18 @@ async fn main() -> anyhow::Result<()> {
         info!("⚠️  API key authentication disabled (set LMS_API_KEY or LMS_API_KEYS to enable)");
     }
 
+    // Initialize rate limiting
+    let rate_limit_enabled = rate_limit::init_rate_limiter();
+    if rate_limit_enabled {
+        info!("⏱️  Rate limiting enabled");
+    } else {
+        info!("⚠️  Rate limiting disabled (set LMS_RATE_LIMIT to enable)");
+    }
+
+    // Initialize metrics
+    let _metrics = metrics::init_metrics();
+    info!("📊 Metrics endpoint enabled at /metrics");
+
     // Create app state with grouped services
     let start_time = Instant::now();
     let state = api::AppState::new(api::Services {
@@ -133,8 +145,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Build router
     let app = Router::new()
-        // Health check
+        // Health check and metrics
         .route("/health", get(api::health))
+        .route("/metrics", get(metrics::metrics_handler))
         .route("/v1/models", get(api::list_models))
         // OpenAI compatible endpoints
         .route("/v1/chat/completions", post(api::chat_completions))
@@ -169,6 +182,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/workspaces/:workspace_id/sessions/:session_id/messages", post(api::add_chat_message))
         // Status endpoint
         .route("/v1/status", get(api::server_status))
+        .layer(middleware::from_fn(metrics::metrics_middleware))
+        .layer(middleware::from_fn(rate_limit::rate_limit_middleware))
         .layer(middleware::from_fn(auth::auth_middleware))
         .layer(CorsLayer::permissive())
         .with_state(state);

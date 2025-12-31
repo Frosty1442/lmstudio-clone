@@ -721,7 +721,7 @@ mod tests {
         body::Body,
         http::{Request, StatusCode},
         Router,
-        routing::{get, post},
+        routing::get,
     };
     use tower::ServiceExt;
     use tempfile::TempDir;

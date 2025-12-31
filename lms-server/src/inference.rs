@@ -46,7 +46,9 @@ pub struct CompletionResponse {
 pub struct ModelProcess {
     child: Child,
     port: u16,
+    #[allow(dead_code)] // Stored for future model info queries
     model_path: PathBuf,
+    #[allow(dead_code)] // Stored for future accelerator reporting
     accelerator: AcceleratorType,
 }
 
